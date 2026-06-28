@@ -18,7 +18,9 @@ app.add_middleware(
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'RSD 3.csv'))
 df.columns = df.columns.str.strip()
-tse_cols = ['Barent Qty', 'Royal Ace Qty', 'Dennis Gold Qty', 'BL GA Qty', 'BL Pure Qty', 'CNC RUM Qty']
+
+# Naye column names
+tse_cols = ['Sale-Barent Qty', 'Sale-Royal Ace Qty', 'Sale-Dennis Gold Qty', 'Sale-BL GA Qty', 'Sale-BL Pure Qty', 'Sale-CNC RUM Qty']
 df['Total'] = df[tse_cols].sum(axis=1)
 
 class ChatRequest(BaseModel):
@@ -33,13 +35,13 @@ def chat(request: ChatRequest):
     question = request.message.lower()
     
     if 'top tse' in question or 'best tse' in question:
-        result = df.groupby('TSE Name')['Total'].sum().sort_values(ascending=False).head(3)
+        result = df.groupby('TSE/Sales Man Name')['Total'].sum().sort_values(ascending=False).head(3)
         data = f"Top 3 TSE:\n{result.to_string()}"
-    elif 'tse' in question or 'sab tse' in question or 'all tse' in question:
-        result = df.groupby('TSE Name')['Total'].sum().sort_values(ascending=False)
+    elif 'tse' in question or 'sab tse' in question or 'all tse' in question or 'sales man' in question:
+        result = df.groupby('TSE/Sales Man Name')['Total'].sum().sort_values(ascending=False)
         data = f"All TSE Performance:\n{result.to_string()}"
     elif 'dept' in question or 'department' in question or 'vibhag' in question:
-        result = df.groupby('Dept.')['Total'].sum().sort_values(ascending=False)
+        result = df.groupby('Department')['Total'].sum().sort_values(ascending=False)
         data = f"Department Sales:\n{result.to_string()}"
     elif 'top party' in question or 'best party' in question:
         result = df.groupby('Party Name')['Total'].sum().sort_values(ascending=False).head(5)
@@ -51,24 +53,24 @@ def chat(request: ChatRequest):
         result = df.groupby('Month')['Total'].sum().sort_values(ascending=False)
         data = f"Monthly Sales:\n{result.to_string()}"
     elif 'barent' in question:
-        result = df.groupby('TSE Name')['Barent Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-Barent Qty'].sum().sort_values(ascending=False)
         data = f"Barent Qty by TSE:\n{result.to_string()}"
     elif 'royal' in question:
-        result = df.groupby('TSE Name')['Royal Ace Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-Royal Ace Qty'].sum().sort_values(ascending=False)
         data = f"Royal Ace by TSE:\n{result.to_string()}"
     elif 'dennis' in question:
-        result = df.groupby('TSE Name')['Dennis Gold Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-Dennis Gold Qty'].sum().sort_values(ascending=False)
         data = f"Dennis Gold by TSE:\n{result.to_string()}"
     elif 'bl ga' in question or 'blga' in question:
-        result = df.groupby('TSE Name')['BL GA Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-BL GA Qty'].sum().sort_values(ascending=False)
         data = f"BL GA by TSE:\n{result.to_string()}"
     elif 'bl pure' in question or 'blpure' in question:
-        result = df.groupby('TSE Name')['BL Pure Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-BL Pure Qty'].sum().sort_values(ascending=False)
         data = f"BL Pure by TSE:\n{result.to_string()}"
     elif 'cnc' in question or 'rum' in question:
-        result = df.groupby('TSE Name')['CNC RUM Qty'].sum().sort_values(ascending=False)
+        result = df.groupby('TSE/Sales Man Name')['Sale-CNC RUM Qty'].sum().sort_values(ascending=False)
         data = f"CNC RUM by TSE:\n{result.to_string()}"
-    elif 'product' in question or 'item' in question:
+    elif 'product' in question or 'item' in question or 'brand' in question:
         result = df[tse_cols].sum().sort_values(ascending=False)
         data = f"Product wise Total Sales:\n{result.to_string()}"
     elif 'total' in question or 'kul' in question:
@@ -78,7 +80,7 @@ def chat(request: ChatRequest):
         result = df.groupby('Excise Code')['Total'].sum().sort_values(ascending=False).head(5)
         data = f"Top Excise Codes:\n{result.to_string()}"
     else:
-        data = f"RSD Sales Data available. Puchho: Top TSE, Dept, Party, Month, Product, Barent, Royal, Dennis, BL GA, BL Pure, CNC RUM, Total"
+        data = f"RSD Sales Data available. Puchho: Top TSE, Department, Party, Month, Product, Barent, Royal, Dennis, BL GA, BL Pure, CNC RUM, Total"
     
     response = client.messages.create(
         model="claude-haiku-4-5",
