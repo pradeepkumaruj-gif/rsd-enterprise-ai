@@ -63,11 +63,11 @@ def chat(request: ChatRequest):
 
     # Party queries
     elif 'party' in question and ('month' in question or 'mahina' in question):
-    result = df.groupby(['Party Name', 'Month'])['Total'].sum().unstack(fill_value=0)
-    result['Total'] = result.sum(axis=1)
-    result = result.sort_values('Total', ascending=False).head(10)
-    result.columns.name = None
-    data = f"Party Month wise Sales:\n{result.to_string()}"
+        result = df.groupby(['Party Name', 'Month'])['Total'].sum().unstack(fill_value=0)
+        result['Total'] = result.sum(axis=1)
+        result = result.sort_values('Total', ascending=False).head(10)
+        result.columns.name = None
+        data = f"Party Month wise Sales:\n{result.to_string()}"
 
     elif 'top party' in question or 'best party' in question:
         result = df.groupby('Party Name')['Total'].sum().sort_values(ascending=False).head(5)
