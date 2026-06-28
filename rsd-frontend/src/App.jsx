@@ -17,7 +17,7 @@ function App() {
   const [listening, setListening] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [theme, setTheme] = useState("dark")
+  const [theme, setTheme] = useState("light")
   const [font, setFont] = useState(FONTS[0].value)
   const recognitionRef = useRef(null)
   const messagesEndRef = useRef(null)
