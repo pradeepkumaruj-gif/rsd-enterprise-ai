@@ -86,7 +86,7 @@ function App() {
     .replace(/^## (.*)/gm, '<h3 style="margin:12px 0 6px;font-size:16px">$1</h3>')
     .replace(/^# (.*)/gm, '<h2 style="margin:14px 0 8px;font-size:18px">$1</h2>')
     .replace(/^- (.*)/gm, '<div style="margin:4px 0;padding-left:16px">• $1</div>')
-    .replace(/\n/g, '<br/>')
+    .replace(/\n\n/g, '<br/>')
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return
