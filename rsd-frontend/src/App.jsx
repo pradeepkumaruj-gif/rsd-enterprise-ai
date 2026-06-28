@@ -81,12 +81,74 @@ function App() {
     setListening(true)
   }
 
-  const formatText = (text) => text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^## (.*)/gm, '<h3 style="margin:12px 0 6px;font-size:16px">$1</h3>')
-    .replace(/^# (.*)/gm, '<h2 style="margin:14px 0 8px;font-size:18px">$1</h2>')
-    .replace(/^- (.*)/gm, '<div style="margin:4px 0;padding-left:16px">• $1</div>')
-    .replace(/\n\n/g, '<br/>')
+  const formatText = (text) => {
+    // Table detection and formatting
+    const lines = text.split('\n')
+    let result = []
+    let tableLines = []
+    let inTable = false
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      // Check if line looks like a table (has | characters)
+      if (line.includes('|') && line.trim().startsWith('|')) {
+        inTable = true
+        tableLines.push(line)
+      } else {
+        if (inTable && tableLines.length > 0) {
+          result.push(renderTable(tableLines))
+          tableLines = []
+          inTable = false
+        }
+        // Format regular text
+        let formatted = line
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/^## (.*)/g, '<h3 style="margin:12px 0 6px;font-size:16px;font-weight:600">$1</h3>')
+          .replace(/^# (.*)/g, '<h2 style="margin:14px 0 8px;font-size:18px;font-weight:700">$1</h2>')
+          .replace(/^- (.*)/g, '<div style="margin:3px 0;padding-left:16px">• $1</div>')
+          .replace(/^```[\s\S]*?```/g, '')
+        result.push(formatted)
+      }
+    }
+
+    if (tableLines.length > 0) {
+      result.push(renderTable(tableLines))
+    }
+
+    return result.join('\n')
+      .replace(/\n\n/g, '<br/>')
+      .replace(/\n/g, ' ')
+  }
+
+  const renderTable = (lines) => {
+    const rows = lines.filter(l => !l.match(/^\|[-\s|]+\|$/)) // Remove separator rows
+    if (rows.length === 0) return ''
+
+    const isDarkMode = isDark
+    const headerBg = isDarkMode ? '#333' : '#f0f0f0'
+    const rowBg = isDarkMode ? '#2a2a2a' : '#ffffff'
+    const altRowBg = isDarkMode ? '#252525' : '#f9f9f9'
+    const borderColor = isDarkMode ? '#444' : '#e0e0e0'
+    const textColor = isDarkMode ? '#ececec' : '#1a1a1a'
+
+    let tableHtml = `<div style="overflow-x:auto;margin:12px 0"><table style="border-collapse:collapse;width:100%;font-size:14px">`
+
+    rows.forEach((row, idx) => {
+      const cells = row.split('|').filter(c => c.trim() !== '')
+      const isHeader = idx === 0
+      const bg = isHeader ? headerBg : (idx % 2 === 0 ? rowBg : altRowBg)
+
+      tableHtml += `<tr style="background:${bg}">`
+      cells.forEach(cell => {
+        const tag = isHeader ? 'th' : 'td'
+        tableHtml += `<${tag} style="padding:8px 12px;border:1px solid ${borderColor};color:${textColor};${isHeader ? 'font-weight:600;' : ''}">${cell.trim()}</${tag}>`
+      })
+      tableHtml += `</tr>`
+    })
+
+    tableHtml += `</table></div>`
+    return tableHtml
+  }
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return
@@ -237,35 +299,51 @@ function App() {
           )}
 
           {messages.map((m, i) => (
-            <div key={i} style={{
-              padding: "20px 0",
-              background: m.role === "assistant" ? c.bg2 : c.bg,
-              borderBottom: `1px solid ${c.border}`,
-            }}>
-              <div style={{
-                maxWidth: "720px", margin: "0 auto", padding: "0 24px",
-                display: "flex", gap: "14px", alignItems: "flex-start",
+            m.role === "user" ? (
+              // User message — RIGHT side
+              <div key={i} style={{
+                padding: "16px 20px",
+                display: "flex",
+                justifyContent: "flex-end",
+                borderBottom: `1px solid ${c.border}`,
               }}>
-                {/* Avatar — sirf colored dot, no icon */}
                 <div style={{
-                  width: "28px", height: "28px", borderRadius: "50%",
-                  background: m.role === "user" ? c.userDot : c.aiDot,
-                  flexShrink: 0, marginTop: "2px",
-                }} />
-                {/* Text — LEFT aligned */}
-                <div style={{
-                  flex: 1, lineHeight: "1.7", fontSize: "15px", color: c.text,
-                  textAlign: "left",
+                  maxWidth: "70%",
+                  background: isDark ? "#7c3aed" : "#7c3aed",
+                  color: "white",
+                  padding: "10px 16px",
+                  borderRadius: "18px 18px 4px 18px",
+                  fontSize: "15px",
+                  lineHeight: "1.5",
                 }}>
-                  <p style={{ fontWeight: "600", fontSize: "13px", color: c.text2, marginBottom: "6px" }}>
-                    {m.role === "user" ? "Aap" : "RSD AI"}
-                  </p>
-                  {m.role === "assistant"
-                    ? <div dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
-                    : <div>{m.content}</div>}
+                  {m.content}
                 </div>
               </div>
-            </div>
+            ) : (
+              // AI message — LEFT side
+              <div key={i} style={{
+                padding: "20px 0",
+                background: c.bg2,
+                borderBottom: `1px solid ${c.border}`,
+              }}>
+                <div style={{
+                  maxWidth: "720px", margin: "0 auto", padding: "0 24px",
+                  display: "flex", gap: "14px", alignItems: "flex-start",
+                }}>
+                  <div style={{
+                    width: "28px", height: "28px", borderRadius: "50%",
+                    background: c.aiDot, flexShrink: 0, marginTop: "2px",
+                  }} />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontWeight: "600", fontSize: "13px", color: c.text2, marginBottom: "8px" }}>
+                      RSD AI
+                    </p>
+                    <div style={{ lineHeight: "1.7", fontSize: "15px", color: c.text }}
+                      dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
+                  </div>
+                </div>
+              </div>
+            )
           ))}
 
           {loading && (
@@ -334,7 +412,7 @@ function App() {
             </div>
             <div style={{ padding: "24px" }}>
               <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "16px", textTransform: "uppercase", letterSpacing: "0.8px" }}>Appearance</p>
-              
+
               <div style={{ marginBottom: "24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <p style={{ fontWeight: "500", marginBottom: "4px" }}>Theme</p>
@@ -380,7 +458,7 @@ function App() {
 
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { margin: 0; }
+        body { margin: 0; background: white; }
         @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
