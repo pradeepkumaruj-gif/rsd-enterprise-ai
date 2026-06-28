@@ -16,7 +16,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768)
   const [theme, setTheme] = useState("light")
   const [font, setFont] = useState(FONTS[0].value)
   const recognitionRef = useRef(null)
