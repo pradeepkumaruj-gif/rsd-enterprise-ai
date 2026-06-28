@@ -27,14 +27,16 @@ function App() {
 
   const c = {
     bg: isDark ? "#212121" : "#ffffff",
-    bg2: isDark ? "#2a2a2a" : "#f5f5f5",
-    bg3: isDark ? "#2f2f2f" : "#ececec",
-    sidebar: isDark ? "#171717" : "#f0f0f0",
-    border: isDark ? "#333" : "#ddd",
+    bg2: isDark ? "#2a2a2a" : "#f7f7f7",
+    bg3: isDark ? "#2f2f2f" : "#f0f0f0",
+    sidebar: isDark ? "#171717" : "#ffffff",
+    border: isDark ? "#333" : "#e5e5e5",
     text: isDark ? "#ececec" : "#1a1a1a",
     text2: isDark ? "#aaa" : "#666",
-    hover: isDark ? "#2a2a2a" : "#e8e8e8",
-    active: isDark ? "#333" : "#ddd",
+    hover: isDark ? "#2a2a2a" : "#f5f5f5",
+    active: isDark ? "#333" : "#efefef",
+    userDot: "#7c3aed",
+    aiDot: "#e05d26",
   }
 
   const activeChat = chats.find(ch => ch.id === activeChatId)
@@ -81,7 +83,9 @@ function App() {
 
   const formatText = (text) => text
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^# (.*)/gm, '<h3 style="margin:8px 0">$1</h3>')
+    .replace(/^## (.*)/gm, '<h3 style="margin:12px 0 6px;font-size:16px">$1</h3>')
+    .replace(/^# (.*)/gm, '<h2 style="margin:14px 0 8px;font-size:18px">$1</h2>')
+    .replace(/^- (.*)/gm, '<div style="margin:4px 0;padding-left:16px">• $1</div>')
     .replace(/\n/g, '<br/>')
 
   const sendMessage = async () => {
@@ -97,7 +101,7 @@ function App() {
       const isFirst = ch.messages.length === 0
       return {
         ...ch,
-        title: isFirst ? msgText.slice(0, 30) + (msgText.length > 30 ? "..." : "") : ch.title,
+        title: isFirst ? msgText.slice(0, 28) + (msgText.length > 28 ? "..." : "") : ch.title,
         messages: [...ch.messages, userMsg]
       }
     }))
@@ -141,22 +145,25 @@ function App() {
       {/* Sidebar */}
       {sidebarOpen && (
         <div style={{
-          width: "260px", minWidth: "260px", background: c.sidebar,
-          borderRight: `1px solid ${c.border}`, display: "flex", flexDirection: "column",
+          width: "260px", minWidth: "260px",
+          background: c.sidebar,
+          borderRight: `1px solid ${c.border}`,
+          display: "flex", flexDirection: "column",
           height: "100vh", overflow: "hidden",
         }}>
-          {/* Sidebar Header */}
           <div style={{ padding: "16px 12px", borderBottom: `1px solid ${c.border}` }}>
             <button onClick={newChat} style={{
-              width: "100%", padding: "10px 14px", background: isDark ? "#333" : "#e0e0e0",
-              border: "none", borderRadius: "10px", color: c.text, cursor: "pointer",
-              fontSize: "14px", fontWeight: "500", display: "flex", alignItems: "center", gap: "8px",
+              width: "100%", padding: "10px 14px",
+              background: isDark ? "#2a2a2a" : "#f5f5f5",
+              border: `1px solid ${c.border}`,
+              borderRadius: "10px", color: c.text, cursor: "pointer",
+              fontSize: "14px", fontWeight: "500",
+              display: "flex", alignItems: "center", gap: "8px",
             }}>
-              ✏️ <span>Naya Chat</span>
+              ✏️ Naya Chat
             </button>
           </div>
 
-          {/* Chat List */}
           <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
             <p style={{ fontSize: "11px", color: c.text2, padding: "8px 8px 4px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
               Chat History
@@ -167,28 +174,26 @@ function App() {
                   padding: "10px 12px", borderRadius: "8px", cursor: "pointer", marginBottom: "2px",
                   background: ch.id === activeChatId ? c.active : "transparent",
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  transition: "background 0.15s",
                 }}
                 onMouseEnter={e => { if (ch.id !== activeChatId) e.currentTarget.style.background = c.hover }}
                 onMouseLeave={e => { if (ch.id !== activeChatId) e.currentTarget.style.background = "transparent" }}
               >
-                <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, color: c.text }}>
                   💬 {ch.title}
                 </span>
                 <button onClick={(e) => deleteChat(ch.id, e)} style={{
                   background: "transparent", border: "none", cursor: "pointer",
-                  color: c.text2, fontSize: "14px", padding: "2px 4px", borderRadius: "4px", flexShrink: 0,
+                  color: c.text2, fontSize: "13px", padding: "2px 4px", flexShrink: 0,
                 }}>🗑️</button>
               </div>
             ))}
           </div>
 
-          {/* Sidebar Footer */}
           <div style={{ padding: "12px", borderTop: `1px solid ${c.border}` }}>
             <button onClick={() => setShowSettings(true)} style={{
               width: "100%", padding: "10px 14px", background: "transparent",
               border: "none", borderRadius: "8px", color: c.text2, cursor: "pointer",
-              fontSize: "13px", display: "flex", alignItems: "center", gap: "8px", textAlign: "left",
+              fontSize: "13px", display: "flex", alignItems: "center", gap: "8px",
             }}>
               ⚙️ Settings
             </button>
@@ -196,8 +201,8 @@ function App() {
         </div>
       )}
 
-      {/* Main Chat Area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Main */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: c.bg }}>
 
         {/* Header */}
         <div style={{
@@ -219,7 +224,7 @@ function App() {
         </div>
 
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "20px 0" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0" }}>
           {messages.length === 0 && (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center",
@@ -232,20 +237,29 @@ function App() {
           )}
 
           {messages.map((m, i) => (
-            <div key={i} style={{ padding: "8px 0", background: m.role === "assistant" ? c.bg2 : "transparent" }}>
+            <div key={i} style={{
+              padding: "20px 0",
+              background: m.role === "assistant" ? c.bg2 : c.bg,
+              borderBottom: `1px solid ${c.border}`,
+            }}>
               <div style={{
-                maxWidth: "760px", margin: "0 auto", padding: "12px 20px",
-                display: "flex", gap: "12px", alignItems: "flex-start",
+                maxWidth: "720px", margin: "0 auto", padding: "0 24px",
+                display: "flex", gap: "14px", alignItems: "flex-start",
               }}>
+                {/* Avatar — sirf colored dot, no icon */}
                 <div style={{
-                  width: "32px", height: "32px", borderRadius: "50%",
-                  background: m.role === "user" ? "#7c3aed" : "#e05d26",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: "14px", flexShrink: 0,
+                  width: "28px", height: "28px", borderRadius: "50%",
+                  background: m.role === "user" ? c.userDot : c.aiDot,
+                  flexShrink: 0, marginTop: "2px",
+                }} />
+                {/* Text — LEFT aligned */}
+                <div style={{
+                  flex: 1, lineHeight: "1.7", fontSize: "15px", color: c.text,
+                  textAlign: "left",
                 }}>
-                  {m.role === "user" ? "👤" : "🤖"}
-                </div>
-                <div style={{ flex: 1, paddingTop: "4px", lineHeight: "1.6", fontSize: "15px" }}>
+                  <p style={{ fontWeight: "600", fontSize: "13px", color: c.text2, marginBottom: "6px" }}>
+                    {m.role === "user" ? "Aap" : "RSD AI"}
+                  </p>
                   {m.role === "assistant"
                     ? <div dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
                     : <div>{m.content}</div>}
@@ -255,13 +269,16 @@ function App() {
           ))}
 
           {loading && (
-            <div style={{ background: c.bg2, padding: "8px 0" }}>
-              <div style={{ maxWidth: "760px", margin: "0 auto", padding: "12px 20px", display: "flex", gap: "12px", alignItems: "center" }}>
-                <div style={{ width: "32px", height: "32px", borderRadius: "50%", background: "#e05d26", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>🤖</div>
-                <div style={{ display: "flex", gap: "4px" }}>
-                  {[0,1,2].map(i => (
-                    <div key={i} style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#888", animation: "bounce 1.2s infinite", animationDelay: `${i*0.2}s` }} />
-                  ))}
+            <div style={{ padding: "20px 0", background: c.bg2, borderBottom: `1px solid ${c.border}` }}>
+              <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 24px", display: "flex", gap: "14px", alignItems: "center" }}>
+                <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: c.aiDot, flexShrink: 0 }} />
+                <div>
+                  <p style={{ fontWeight: "600", fontSize: "13px", color: c.text2, marginBottom: "8px" }}>RSD AI</p>
+                  <div style={{ display: "flex", gap: "4px" }}>
+                    {[0,1,2].map(i => (
+                      <div key={i} style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#888", animation: "bounce 1.2s infinite", animationDelay: `${i*0.2}s` }} />
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -272,8 +289,9 @@ function App() {
         {/* Input */}
         <div style={{ padding: "16px 20px", background: c.bg, borderTop: `1px solid ${c.border}`, flexShrink: 0 }}>
           <div style={{
-            maxWidth: "760px", margin: "0 auto", background: c.bg3,
-            borderRadius: "16px", border: `1px solid ${c.border}`,
+            maxWidth: "720px", margin: "0 auto",
+            background: c.bg3, borderRadius: "16px",
+            border: `1px solid ${c.border}`,
             display: "flex", alignItems: "flex-end", gap: "8px", padding: "10px 14px",
           }}>
             <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown}
@@ -291,9 +309,10 @@ function App() {
                 fontSize: "18px", color: listening ? "white" : "#888",
               }}>{listening ? "🔴" : "🎤"}</button>
               <button onClick={sendMessage} disabled={!input.trim() || loading} style={{
-                background: input.trim() && !loading ? "#e05d26" : "#555",
+                background: input.trim() && !loading ? "#e05d26" : "#ccc",
                 border: "none", borderRadius: "8px", padding: "8px 12px",
-                cursor: input.trim() && !loading ? "pointer" : "default", color: "white", fontSize: "16px",
+                cursor: input.trim() && !loading ? "pointer" : "default",
+                color: "white", fontSize: "16px",
               }}>➤</button>
             </div>
           </div>
@@ -307,14 +326,14 @@ function App() {
       {showSettings && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
           onClick={() => setShowSettings(false)}>
-          <div style={{ background: c.bg, borderRadius: "16px", width: "100%", maxWidth: "500px", maxHeight: "80vh", overflowY: "auto", border: `1px solid ${c.border}`, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
+          <div style={{ background: c.bg, borderRadius: "16px", width: "100%", maxWidth: "480px", maxHeight: "80vh", overflowY: "auto", border: `1px solid ${c.border}`, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ padding: "20px 24px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: "600", fontSize: "18px" }}>⚙️ Settings</span>
+              <span style={{ fontWeight: "600", fontSize: "17px" }}>⚙️ Settings</span>
               <button onClick={() => setShowSettings(false)} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "20px", color: c.text2 }}>✕</button>
             </div>
             <div style={{ padding: "24px" }}>
-              <p style={{ fontWeight: "600", fontSize: "12px", color: c.text2, marginBottom: "16px", textTransform: "uppercase", letterSpacing: "0.5px" }}>Appearance</p>
+              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "16px", textTransform: "uppercase", letterSpacing: "0.8px" }}>Appearance</p>
               
               <div style={{ marginBottom: "24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
@@ -327,7 +346,7 @@ function App() {
                       padding: "6px 12px", border: "none", borderRadius: "6px", cursor: "pointer",
                       background: theme === t.value ? (isDark ? "#444" : "#fff") : "transparent",
                       color: c.text, fontSize: "16px",
-                      boxShadow: theme === t.value ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
+                      boxShadow: theme === t.value ? "0 1px 4px rgba(0,0,0,0.15)" : "none",
                     }}>{t.icon}</button>
                   ))}
                 </div>
@@ -336,21 +355,21 @@ function App() {
               <div style={{ marginBottom: "24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <p style={{ fontWeight: "500", marginBottom: "4px" }}>Chat Font</p>
-                  <p style={{ fontSize: "13px", color: c.text2 }}>Font choose karo</p>
+                  <p style={{ fontSize: "13px", color: c.text2 }}>Font style choose karo</p>
                 </div>
                 <select value={font} onChange={e => setFont(e.target.value)} style={{
                   background: c.bg3, border: `1px solid ${c.border}`, color: c.text,
-                  padding: "8px 12px", borderRadius: "8px", fontSize: "14px", outline: "none",
+                  padding: "8px 12px", borderRadius: "8px", fontSize: "14px", outline: "none", cursor: "pointer",
                 }}>
                   {FONTS.map(f => <option key={f.label} value={f.value}>{f.label}</option>)}
                 </select>
               </div>
 
               <hr style={{ border: "none", borderTop: `1px solid ${c.border}`, margin: "20px 0" }} />
-              <p style={{ fontWeight: "600", fontSize: "12px", color: c.text2, marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.5px" }}>About</p>
+              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.8px" }}>About</p>
               <div style={{ fontSize: "14px", color: c.text2, lineHeight: "2" }}>
                 <p>🤖 RSD Enterprise AI</p>
-                <p>📊 Data: 2,214 sales records</p>
+                <p>📊 2,214 sales records</p>
                 <p>⚡ FastAPI + Claude AI</p>
                 <p>🚀 Deployed on Railway</p>
               </div>
@@ -365,7 +384,7 @@ function App() {
         @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
       `}</style>
     </div>
   )
