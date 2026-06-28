@@ -45,6 +45,7 @@ function App() {
       const data = await response.json()
       setMessages(prev => [...prev, { role: "assistant", content: data.reply }])
     } catch (error) {
+      console.error("API Error:", error)
       setMessages(prev => [...prev, { role: "assistant", content: "❌ Error! Dobara try karo." }])
     } finally {
       setLoading(false)
