@@ -18,7 +18,7 @@ app.add_middleware(
 )
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'RSD 3.csv'))
+df = pd.read_csv(os.path.join(os.path.dirname(__file__), 'RSD 3.csv'))
 df.columns = df.columns.str.strip()
 tse_cols = ['Barent Qty', 'Royal Ace Qty', 'Dennis Gold Qty', 'BL GA Qty', 'BL Pure Qty', 'CNC RUM Qty']
 df['Total'] = df[tse_cols].sum(axis=1)
