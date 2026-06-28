@@ -35,7 +35,7 @@ function App() {
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 60000)
-      const response = await fetch("http://127.0.0.1:8000/chat", {
+      const response = await fetch("https://rsd-enterprise-ai-production.up.railway.app/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input }),
