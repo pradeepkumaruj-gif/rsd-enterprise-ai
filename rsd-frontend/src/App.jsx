@@ -103,7 +103,7 @@ function App() {
         setStreamingText("")
         onComplete(fullText)
       }
-    }, 30)
+    }, 15)
   }
 
   const formatText = (text) => {
