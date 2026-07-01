@@ -29,23 +29,19 @@ function App() {
 
   const c = {
     bg: isDark ? "#1e1e1e" : "#ffffff",
-    bg2: isDark ? "#2a2a2a" : "#f9f9f9",
-    bg3: isDark ? "#333" : "#f0f0f0",
-    sidebar: isDark ? "#171717" : "#f7f7f7",
-    border: isDark ? "#3a3a3a" : "#e8e8e8",
-    text: isDark ? "#ececec" : "#1a1a1a",
-    text2: isDark ? "#888" : "#666",
-    hover: isDark ? "#2a2a2a" : "#efefef",
-    active: isDark ? "#333" : "#e8e8e8",
-    accent: "#d97706",
+    sidebar: isDark ? "#1a1a1a" : "#f7f7f7",
+    border: isDark ? "#2e2e2e" : "#e8e8e8",
+    text: isDark ? "#e8e8e8" : "#1a1a1a",
+    text2: isDark ? "#777" : "#888",
+    hover: isDark ? "#252525" : "#f0f0f0",
+    active: isDark ? "#2a2a2a" : "#ebebeb",
     userBubble: isDark ? "#2d2d2d" : "#f0f0f0",
-    userText: isDark ? "#ececec" : "#1a1a1a",
+    inputBg: isDark ? "#2a2a2a" : "#f9f9f9",
   }
 
   const activeChat = chats.find(ch => ch.id === activeChatId)
   const messages = activeChat?.messages || []
 
-  // Auto scroll — har message pe
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, streamingText, loading])
@@ -86,7 +82,6 @@ function App() {
     setListening(true)
   }
 
-  // Word by word streaming
   const streamResponse = (fullText, onComplete) => {
     setIsStreaming(true)
     setStreamingText("")
@@ -104,6 +99,26 @@ function App() {
         onComplete(fullText)
       }
     }, 15)
+  }
+
+  const renderTable = (lines) => {
+    const rows = lines.filter(l => !l.match(/^\|[\s-|]+\|$/))
+    if (!rows.length) return ''
+    const bdr = isDark ? '#3a3a3a' : '#e5e5e5'
+    const hBg = isDark ? '#252525' : '#fafafa'
+    const txt = isDark ? '#e8e8e8' : '#1a1a1a'
+    let html = `<div style="overflow-x:auto;margin:12px 0;border-radius:8px;border:1px solid ${bdr}"><table style="border-collapse:collapse;width:100%;font-size:14px">`
+    rows.forEach((row, i) => {
+      const cells = row.split('|').filter(c => c.trim())
+      const isH = i === 0
+      html += `<tr style="background:${isH ? hBg : 'transparent'}">`
+      cells.forEach(cell => {
+        const tag = isH ? 'th' : 'td'
+        html += `<${tag} style="padding:10px 16px;border-bottom:1px solid ${bdr};color:${txt};text-align:left;${isH ? 'font-weight:600;font-size:13px' : 'font-size:14px'}">${cell.trim()}</${tag}>`
+      })
+      html += '</tr>'
+    })
+    return html + '</table></div>'
   }
 
   const formatText = (text) => {
@@ -125,35 +140,15 @@ function App() {
         }
         let formatted = line
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-          .replace(/^## (.*)/g, `<div style="font-size:16px;font-weight:700;margin:12px 0 6px;color:${c.text}">$1</div>`)
-          .replace(/^# (.*)/g, `<div style="font-size:18px;font-weight:700;margin:14px 0 8px;color:${c.text}">$1</div>`)
-          .replace(/^- (.*)/g, `<div style="margin:3px 0;padding-left:16px;display:flex;gap:8px"><span style="color:${c.accent}">•</span><span>$1</span></div>`)
-          .replace(/`(.*?)`/g, `<code style="background:${isDark?'#333':'#f0f0f0'};padding:1px 5px;border-radius:4px;font-size:13px;font-family:monospace">$1</code>`)
+          .replace(/^## (.*)/g, `<div style="font-size:16px;font-weight:700;margin:16px 0 6px">$1</div>`)
+          .replace(/^# (.*)/g, `<div style="font-size:18px;font-weight:700;margin:18px 0 8px">$1</div>`)
+          .replace(/^- (.*)/g, `<div style="margin:2px 0;padding-left:16px;display:flex;gap:8px;align-items:flex-start"><span style="margin-top:6px;width:5px;height:5px;border-radius:50%;background:${isDark?'#888':'#555'};flex-shrink:0"></span><span>$1</span></div>`)
+          .replace(/`(.*?)`/g, `<code style="background:${isDark?'#2a2a2a':'#f0f0f0'};padding:2px 6px;border-radius:4px;font-size:13px;font-family:monospace">$1</code>`)
         result.push(formatted)
       }
     }
     if (tableLines.length > 0) result.push(renderTable(tableLines))
-    return result.join('<br/>').replace(/<br\/><br\/>/g, '<br/>')
-  }
-
-  const renderTable = (lines) => {
-    const rows = lines.filter(l => !l.match(/^\|[\s-|]+\|$/))
-    if (!rows.length) return ''
-    const bdr = isDark ? '#444' : '#e0e0e0'
-    const hBg = isDark ? '#2a2a2a' : '#f5f5f5'
-    const txt = isDark ? '#ececec' : '#1a1a1a'
-    let html = `<div style="overflow-x:auto;margin:12px 0;border-radius:8px;border:1px solid ${bdr}"><table style="border-collapse:collapse;width:100%;font-size:14px">`
-    rows.forEach((row, i) => {
-      const cells = row.split('|').filter(c => c.trim())
-      const isH = i === 0
-      html += `<tr style="background:${isH ? hBg : 'transparent'}">`
-      cells.forEach(cell => {
-        const tag = isH ? 'th' : 'td'
-        html += `<${tag} style="padding:10px 14px;border-bottom:1px solid ${bdr};color:${txt};text-align:left;${isH ? 'font-weight:600' : ''}">${cell.trim()}</${tag}>`
-      })
-      html += '</tr>'
-    })
-    return html + '</table></div>'
+    return result.filter(l => l !== '').join('\n').replace(/\n/g, '<br/>')
   }
 
   const sendMessage = async () => {
@@ -215,9 +210,7 @@ function App() {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px"
   }
 
-  const copyText = (text) => {
-    navigator.clipboard.writeText(text)
-  }
+  const copyText = (text) => navigator.clipboard.writeText(text)
 
   return (
     <div style={{ display: "flex", height: "100vh", background: c.bg, color: c.text, fontFamily: font, overflow: "hidden" }}>
@@ -230,272 +223,271 @@ function App() {
       {/* Sidebar — Claude style */}
       {sidebarOpen && (
         <div style={{
-          width: "260px", minWidth: "260px", background: c.sidebar,
+          width: "240px", minWidth: "240px", background: c.sidebar,
           borderRight: `1px solid ${c.border}`, display: "flex", flexDirection: "column",
           height: "100vh", overflow: "hidden",
           position: window.innerWidth < 768 ? "fixed" : "relative", zIndex: 50,
-          boxShadow: window.innerWidth < 768 ? "4px 0 20px rgba(0,0,0,0.15)" : "none",
         }}>
-          {/* Logo */}
-          <div style={{ padding: "16px", borderBottom: `1px solid ${c.border}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", padding: "4px" }}>
-              <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: c.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>🤖</div>
-              <span style={{ fontWeight: "700", fontSize: "14px" }}>RSD Enterprise AI</span>
+          {/* Logo area */}
+          <div style={{ padding: "14px 16px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px" }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" fill={isDark?"#444":"#e0e0e0"}/>
+                <text x="12" y="16" textAnchor="middle" fontSize="12" fill={isDark?"#fff":"#333"}>R</text>
+              </svg>
+              <span style={{ fontWeight: "600", fontSize: "15px" }}>RSD AI</span>
             </div>
+
+            {/* New chat button */}
             <button onClick={newChat} style={{
-              width: "100%", padding: "9px 14px", background: "transparent",
+              width: "100%", padding: "8px 12px", background: "transparent",
               border: `1px solid ${c.border}`, borderRadius: "8px", color: c.text,
-              cursor: "pointer", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px",
+              cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", gap: "8px",
               transition: "background 0.15s",
             }}
               onMouseEnter={e => e.currentTarget.style.background = c.hover}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
             >
-              <span style={{ fontSize: "16px" }}>✏️</span> New conversation
+              <span style={{ fontSize: "16px", lineHeight: 1 }}>+</span>
+              <span>New conversation</span>
             </button>
           </div>
 
           {/* Chat list */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
-            <p style={{ fontSize: "11px", color: c.text2, padding: "6px 8px", textTransform: "uppercase", letterSpacing: "0.8px", fontWeight: "600" }}>Recents</p>
+          <div style={{ flex: 1, overflowY: "auto", padding: "4px 8px" }}>
+            <p style={{ fontSize: "11px", color: c.text2, padding: "6px 8px 4px", textTransform: "uppercase", letterSpacing: "0.8px", fontWeight: "600" }}>Recents</p>
             {chats.map(ch => (
-              <div key={ch.id} onClick={() => { setActiveChatId(ch.id); if (window.innerWidth < 768) setSidebarOpen(false) }}
+              <div key={ch.id}
+                onClick={() => { setActiveChatId(ch.id); if (window.innerWidth < 768) setSidebarOpen(false) }}
                 style={{
-                  padding: "9px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "1px",
+                  padding: "8px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "1px",
                   background: ch.id === activeChatId ? c.active : "transparent",
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  transition: "background 0.1s",
+                  transition: "background 0.1s", group: true,
                 }}
                 onMouseEnter={e => { if (ch.id !== activeChatId) e.currentTarget.style.background = c.hover }}
                 onMouseLeave={e => { if (ch.id !== activeChatId) e.currentTarget.style.background = "transparent" }}
               >
-                <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, color: c.text }}>
+                <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                   {ch.title}
                 </span>
                 <button onClick={(e) => deleteChat(ch.id, e)} style={{
                   background: "transparent", border: "none", cursor: "pointer",
-                  color: c.text2, fontSize: "12px", padding: "2px 4px", opacity: 0,
-                  transition: "opacity 0.2s",
+                  color: c.text2, fontSize: "13px", padding: "1px 4px",
+                  opacity: 0, transition: "opacity 0.15s",
                 }}
                   onMouseEnter={e => e.target.style.opacity = 1}
                   onMouseLeave={e => e.target.style.opacity = 0}
-                >🗑️</button>
+                >✕</button>
               </div>
             ))}
           </div>
 
-          {/* Settings */}
-          <div style={{ padding: "12px", borderTop: `1px solid ${c.border}` }}>
+          {/* Bottom */}
+          <div style={{ padding: "12px 8px", borderTop: `1px solid ${c.border}` }}>
             <button onClick={() => setShowSettings(true)} style={{
-              width: "100%", padding: "9px 14px", background: "transparent",
-              border: "none", borderRadius: "8px", color: c.text2, cursor: "pointer",
+              width: "100%", padding: "8px 12px", background: "transparent",
+              border: "none", borderRadius: "6px", color: c.text2, cursor: "pointer",
               fontSize: "13px", display: "flex", alignItems: "center", gap: "8px",
               transition: "background 0.15s",
             }}
               onMouseEnter={e => e.currentTarget.style.background = c.hover}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-            >⚙️ Settings</button>
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+              </svg>
+              Settings
+            </button>
           </div>
         </div>
       )}
 
-      {/* Main area */}
+      {/* Main */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
         {/* Header */}
         <div style={{
-          padding: "12px 16px", borderBottom: `1px solid ${c.border}`,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "10px 16px", borderBottom: `1px solid ${c.border}`,
+          display: "flex", alignItems: "center", gap: "12px",
           background: c.bg, flexShrink: 0,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{
-              background: "transparent", border: "none", cursor: "pointer",
-              padding: "6px", borderRadius: "6px", color: c.text2, fontSize: "18px",
-              transition: "background 0.15s",
-            }}
-              onMouseEnter={e => e.currentTarget.style.background = c.hover}
-              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-            >☰</button>
-            <span style={{ fontSize: "14px", fontWeight: "600", color: c.text }}>
-              {activeChat?.title || "New conversation"}
-            </span>
-          </div>
-          <button onClick={() => setShowSettings(true)} style={{
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{
             background: "transparent", border: "none", cursor: "pointer",
-            padding: "6px", borderRadius: "6px", color: c.text2, fontSize: "16px",
-          }}>⚙️</button>
+            padding: "5px", borderRadius: "5px", color: c.text2, lineHeight: 1,
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <span style={{ fontSize: "13px", color: c.text2, fontWeight: "500" }}>
+            {activeChat?.title || "New conversation"}
+          </span>
         </div>
 
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "24px 0" }}>
+        {/* Messages — NO background, NO border between messages */}
+        <div style={{ flex: 1, overflowY: "auto" }}>
+
           {messages.length === 0 && !isStreaming && (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center",
-              justifyContent: "center", height: "100%", gap: "16px", padding: "40px 20px",
+              justifyContent: "center", height: "100%", gap: "14px", padding: "40px 20px",
             }}>
-              <div style={{
-                width: "56px", height: "56px", borderRadius: "50%",
-                background: c.accent, display: "flex", alignItems: "center",
-                justifyContent: "center", fontSize: "24px",
-              }}>🤖</div>
-              <p style={{ fontSize: "20px", fontWeight: "700" }}>RSD Enterprise AI</p>
-              <p style={{ fontSize: "14px", color: c.text2, textAlign: "center", maxWidth: "280px", lineHeight: "1.6" }}>
-                Sales data ke baare mein kuch bhi poochho
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", maxWidth: "380px", marginTop: "8px" }}>
-                {["Top TSE kaun hai?", "Party wise month sale", "Brand wise performance", "Total sales kitni?"].map(q => (
+              <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: isDark?"#333":"#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>🤖</div>
+              <p style={{ fontSize: "20px", fontWeight: "600" }}>RSD Enterprise AI</p>
+              <p style={{ fontSize: "14px", color: c.text2, textAlign: "center", maxWidth: "260px", lineHeight: "1.6" }}>Sales data ke baare mein kuch bhi poochho</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", maxWidth: "360px", marginTop: "8px" }}>
+                {["Top TSE kaun hai?", "Party wise month sale", "Total sales kitni?", "Brand performance"].map(q => (
                   <button key={q} onClick={() => setInput(q)} style={{
-                    padding: "8px 14px", background: "transparent",
+                    padding: "7px 14px", background: "transparent",
                     border: `1px solid ${c.border}`, borderRadius: "20px",
                     cursor: "pointer", fontSize: "13px", color: c.text,
-                    transition: "all 0.2s",
+                    transition: "all 0.15s",
                   }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = c.accent; e.currentTarget.style.color = c.accent }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = c.border; e.currentTarget.style.color = c.text }}
+                    onMouseEnter={e => e.currentTarget.style.background = c.hover}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                   >{q}</button>
                 ))}
               </div>
             </div>
           )}
 
-          {messages.map((m, i) => (
-            <div key={i} style={{ marginBottom: "0" }}>
-              {m.role === "user" ? (
-                // User — right side
-                <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 24px" }}>
-                  <div style={{
-                    maxWidth: "65%", background: c.userBubble, color: c.userText,
-                    padding: "12px 16px", borderRadius: "18px 18px 4px 18px",
-                    fontSize: "15px", lineHeight: "1.6",
-                  }}>
-                    {m.content}
-                  </div>
-                </div>
-              ) : (
-                // AI — left side, Claude style
-                <div style={{ padding: "16px 24px", borderBottom: `1px solid ${c.border}` }}>
-                  <div style={{ maxWidth: "720px", margin: "0 auto", display: "flex", gap: "12px" }}>
+          {/* Messages — Claude style — no dividers, no background */}
+          <div style={{ maxWidth: "680px", margin: "0 auto", padding: "24px 20px" }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{ marginBottom: "24px" }}>
+                {m.role === "user" ? (
+                  // User — right aligned bubble
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
                     <div style={{
-                      width: "28px", height: "28px", borderRadius: "50%",
-                      background: c.accent, flexShrink: 0, marginTop: "2px",
-                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px",
+                      maxWidth: "80%", background: c.userBubble,
+                      padding: "10px 16px", borderRadius: "18px 18px 4px 18px",
+                      fontSize: "15px", lineHeight: "1.6", color: c.text,
+                    }}>
+                      {m.content}
+                    </div>
+                  </div>
+                ) : (
+                  // AI — left, no background, no border
+                  <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                    <div style={{
+                      width: "24px", height: "24px", borderRadius: "50%",
+                      background: isDark?"#333":"#f0f0f0", flexShrink: 0, marginTop: "2px",
+                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px",
                     }}>🤖</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                        <span style={{ fontSize: "13px", fontWeight: "600", color: c.accent }}>RSD AI</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                        <span style={{ fontSize: "13px", fontWeight: "600", color: c.text }}>RSD AI</span>
                         <button onClick={() => copyText(m.content)} style={{
-                          background: "transparent", border: `1px solid ${c.border}`,
-                          borderRadius: "5px", padding: "3px 8px", cursor: "pointer",
-                          fontSize: "11px", color: c.text2,
+                          background: "transparent", border: "none", cursor: "pointer",
+                          fontSize: "11px", color: c.text2, padding: "2px 6px",
+                          opacity: 0.6,
                         }}>Copy</button>
                       </div>
-                      <div style={{ fontSize: "15px", lineHeight: "1.8", color: c.text }}
+                      <div style={{ fontSize: "15px", lineHeight: "1.7", color: c.text }}
                         dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            ))}
 
-          {/* Streaming text — word by word */}
-          {isStreaming && (
-            <div style={{ padding: "16px 24px", borderBottom: `1px solid ${c.border}` }}>
-              <div style={{ maxWidth: "720px", margin: "0 auto", display: "flex", gap: "12px" }}>
-                <div style={{
-                  width: "28px", height: "28px", borderRadius: "50%",
-                  background: c.accent, flexShrink: 0, marginTop: "2px",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px",
-                }}>🤖</div>
+            {/* Streaming */}
+            {isStreaming && (
+              <div style={{ display: "flex", gap: "12px", alignItems: "flex-start", marginBottom: "24px" }}>
+                <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: isDark?"#333":"#f0f0f0", flexShrink: 0, marginTop: "2px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px" }}>🤖</div>
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: "13px", fontWeight: "600", color: c.accent, display: "block", marginBottom: "8px" }}>RSD AI</span>
-                  <div style={{ fontSize: "15px", lineHeight: "1.8", color: c.text }}
-                    dangerouslySetInnerHTML={{ __html: formatText(streamingText) + '<span style="display:inline-block;width:2px;height:16px;background:' + c.accent + ';margin-left:2px;animation:blink 1s infinite;vertical-align:text-bottom"></span>' }} />
+                  <span style={{ fontSize: "13px", fontWeight: "600", display: "block", marginBottom: "6px" }}>RSD AI</span>
+                  <div style={{ fontSize: "15px", lineHeight: "1.7" }}
+                    dangerouslySetInnerHTML={{ __html: formatText(streamingText) + `<span style="display:inline-block;width:2px;height:15px;background:${isDark?'#aaa':'#555'};margin-left:1px;animation:blink 1s infinite;vertical-align:text-bottom"></span>` }} />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Loading dots */}
-          {loading && (
-            <div style={{ padding: "16px 24px" }}>
-              <div style={{ maxWidth: "720px", margin: "0 auto", display: "flex", gap: "12px", alignItems: "center" }}>
-                <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: c.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px" }}>🤖</div>
-                <div style={{ display: "flex", gap: "4px", paddingTop: "4px" }}>
+            {/* Loading */}
+            {loading && (
+              <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "24px" }}>
+                <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: isDark?"#333":"#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px" }}>🤖</div>
+                <div style={{ display: "flex", gap: "4px" }}>
                   {[0,1,2].map(i => (
-                    <div key={i} style={{ width: "7px", height: "7px", borderRadius: "50%", background: c.accent, animation: "bounce 1.2s infinite", animationDelay: `${i*0.15}s`, opacity: 0.7 }} />
+                    <div key={i} style={{ width: "6px", height: "6px", borderRadius: "50%", background: isDark?"#666":"#bbb", animation: "bounce 1.2s infinite", animationDelay: `${i*0.15}s` }} />
                   ))}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Input — Claude style */}
-        <div style={{ padding: "16px 24px 20px", background: c.bg, flexShrink: 0 }}>
-          <div style={{
-            maxWidth: "720px", margin: "0 auto",
-            background: c.bg3, borderRadius: "12px",
-            border: `1px solid ${c.border}`,
-            display: "flex", alignItems: "flex-end", gap: "8px", padding: "12px 14px",
-            boxShadow: isDark ? "none" : "0 1px 8px rgba(0,0,0,0.06)",
-          }}>
-            <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown}
-              placeholder="Message RSD AI..." rows={1}
-              style={{
-                flex: 1, background: "transparent", border: "none", outline: "none",
-                color: c.text, fontSize: "15px", resize: "none", lineHeight: "1.5",
-                maxHeight: "200px", overflowY: "auto", fontFamily: font,
-              }}
-            />
-            <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-              <button onClick={startVoice} style={{
-                background: listening ? "#ef4444" : "transparent", border: "none",
-                borderRadius: "6px", padding: "5px 7px", cursor: "pointer",
-                fontSize: "16px", color: listening ? "white" : c.text2,
-              }}>{listening ? "🔴" : "🎤"}</button>
-              <button onClick={sendMessage} disabled={!input.trim() || loading || isStreaming} style={{
-                background: input.trim() && !loading && !isStreaming ? c.accent : (isDark ? "#444" : "#ddd"),
-                border: "none", borderRadius: "8px", width: "34px", height: "34px",
-                cursor: input.trim() ? "pointer" : "default",
-                color: "white", fontSize: "16px", display: "flex", alignItems: "center", justifyContent: "center",
-                transition: "background 0.2s",
-              }}>↑</button>
+        <div style={{ padding: "12px 20px 16px", background: c.bg, flexShrink: 0 }}>
+          <div style={{ maxWidth: "680px", margin: "0 auto" }}>
+            <div style={{
+              background: c.inputBg, borderRadius: "12px",
+              border: `1px solid ${c.border}`,
+              display: "flex", alignItems: "flex-end", gap: "8px", padding: "10px 12px",
+              boxShadow: isDark ? "none" : "0 1px 6px rgba(0,0,0,0.06)",
+            }}>
+              <textarea ref={textareaRef} value={input} onChange={handleInput} onKeyDown={handleKeyDown}
+                placeholder="Write a message..." rows={1}
+                style={{
+                  flex: 1, background: "transparent", border: "none", outline: "none",
+                  color: c.text, fontSize: "15px", resize: "none", lineHeight: "1.5",
+                  maxHeight: "200px", overflowY: "auto", fontFamily: font,
+                }}
+              />
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <button onClick={startVoice} style={{
+                  background: "transparent", border: "none", cursor: "pointer",
+                  padding: "4px 6px", borderRadius: "6px", color: listening ? "#ef4444" : c.text2, fontSize: "15px",
+                }}>{listening ? "🔴" : "🎤"}</button>
+                <button onClick={sendMessage} disabled={!input.trim() || loading || isStreaming} style={{
+                  background: input.trim() && !loading && !isStreaming ? (isDark?"#fff":"#1a1a1a") : (isDark?"#333":"#e0e0e0"),
+                  border: "none", borderRadius: "8px", width: "32px", height: "32px",
+                  cursor: input.trim() ? "pointer" : "default",
+                  color: input.trim() && !loading && !isStreaming ? (isDark?"#000":"#fff") : c.text2,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.2s", flexShrink: 0,
+                }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+                  </svg>
+                </button>
+              </div>
             </div>
+            <p style={{ textAlign: "center", fontSize: "11px", color: c.text2, marginTop: "8px" }}>
+              RSD AI can make mistakes. Please verify important data.
+            </p>
           </div>
-          <p style={{ textAlign: "center", fontSize: "11px", color: c.text2, marginTop: "8px" }}>
-            RSD Enterprise AI — Sales Analytics
-          </p>
         </div>
       </div>
 
       {/* Settings Modal */}
       {showSettings && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
           onClick={() => setShowSettings(false)}>
-          <div style={{ background: c.bg, borderRadius: "16px", width: "100%", maxWidth: "460px", maxHeight: "80vh", overflowY: "auto", border: `1px solid ${c.border}`, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+          <div style={{ background: c.bg, borderRadius: "14px", width: "100%", maxWidth: "440px", border: `1px solid ${c.border}`, boxShadow: "0 20px 50px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ padding: "18px 22px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: "700", fontSize: "16px" }}>Settings</span>
-              <button onClick={() => setShowSettings(false)} style={{ background: c.bg3, border: "none", cursor: "pointer", fontSize: "14px", color: c.text2, width: "26px", height: "26px", borderRadius: "50%" }}>✕</button>
+            <div style={{ padding: "18px 20px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: "600", fontSize: "16px" }}>Settings</span>
+              <button onClick={() => setShowSettings(false)} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "18px", color: c.text2 }}>✕</button>
             </div>
-            <div style={{ padding: "22px" }}>
-              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "14px", textTransform: "uppercase", letterSpacing: "1px" }}>Appearance</p>
+            <div style={{ padding: "20px" }}>
+              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "14px", textTransform: "uppercase", letterSpacing: "0.8px" }}>Appearance</p>
 
-              <div style={{ marginBottom: "22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <p style={{ fontWeight: "500", marginBottom: "3px" }}>Theme</p>
+                  <p style={{ fontWeight: "500", fontSize: "14px", marginBottom: "2px" }}>Theme</p>
                   <p style={{ fontSize: "12px", color: c.text2 }}>Interface color</p>
                 </div>
-                <div style={{ display: "flex", gap: "3px", background: c.bg3, borderRadius: "8px", padding: "3px" }}>
+                <div style={{ display: "flex", background: isDark?"#2a2a2a":"#f0f0f0", borderRadius: "8px", padding: "3px", gap: "2px" }}>
                   {[{ v: "light", icon: "☀️" }, { v: "system", icon: "💻" }, { v: "dark", icon: "🌙" }].map(t => (
                     <button key={t.v} onClick={() => setTheme(t.v)} style={{
                       padding: "5px 10px", border: "none", borderRadius: "6px", cursor: "pointer",
-                      background: theme === t.v ? (isDark ? "#555" : "#fff") : "transparent",
-                      fontSize: "15px", boxShadow: theme === t.v ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+                      background: theme === t.v ? (isDark?"#444":"#fff") : "transparent",
+                      fontSize: "14px", transition: "all 0.15s",
+                      boxShadow: theme === t.v ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
                     }}>{t.icon}</button>
                   ))}
                 </div>
@@ -503,19 +495,19 @@ function App() {
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <p style={{ fontWeight: "500", marginBottom: "3px" }}>Font</p>
+                  <p style={{ fontWeight: "500", fontSize: "14px", marginBottom: "2px" }}>Font</p>
                   <p style={{ fontSize: "12px", color: c.text2 }}>Chat font style</p>
                 </div>
                 <select value={font} onChange={e => setFont(e.target.value)} style={{
-                  background: c.bg3, border: `1px solid ${c.border}`, color: c.text,
-                  padding: "7px 10px", borderRadius: "7px", fontSize: "13px", outline: "none",
+                  background: isDark?"#2a2a2a":"#f0f0f0", border: `1px solid ${c.border}`, color: c.text,
+                  padding: "6px 10px", borderRadius: "7px", fontSize: "13px", outline: "none",
                 }}>
                   {FONTS.map(f => <option key={f.label} value={f.value}>{f.label}</option>)}
                 </select>
               </div>
 
               <hr style={{ border: "none", borderTop: `1px solid ${c.border}`, margin: "18px 0" }} />
-              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "10px", textTransform: "uppercase", letterSpacing: "1px" }}>About</p>
+              <p style={{ fontWeight: "600", fontSize: "11px", color: c.text2, marginBottom: "10px", textTransform: "uppercase", letterSpacing: "0.8px" }}>About</p>
               <div style={{ fontSize: "13px", color: c.text2, lineHeight: "2" }}>
                 <p>🤖 RSD Enterprise AI</p>
                 <p>📊 Smart Sales Analytics</p>
@@ -528,12 +520,12 @@ function App() {
 
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { margin: 0; background: white; }
-        @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-5px)} }
+        body { margin: 0; background: ${isDark?"#1e1e1e":"white"}; }
+        @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-4px)} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
         ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 2px; }
-        textarea::placeholder { color: #aaa; }
+        ::-webkit-scrollbar-thumb { background: ${isDark?"#333":"#ddd"}; border-radius: 2px; }
+        textarea::placeholder { color: ${isDark?"#555":"#aaa"}; }
       `}</style>
     </div>
   )
