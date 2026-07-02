@@ -367,7 +367,7 @@ function App() {
           {messages.length === 0 && !isStreaming && (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center",
-              justifyContent: "center", height: "100%", gap: "14px", padding: "40px 20px",
+              justifyContent: "flex-start", height: "100%", gap: "14px", padding: "40px 24px",
             }}>
               <p style={{ fontSize: "22px", fontWeight: "600" }}>RSD Enterprise AI</p>
               <p style={{ fontSize: "14px", color: c.text2, textAlign: "center", maxWidth: "260px", lineHeight: "1.6" }}>
