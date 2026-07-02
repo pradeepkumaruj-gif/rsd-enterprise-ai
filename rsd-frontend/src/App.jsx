@@ -269,7 +269,7 @@ function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
         {/* Header */}
-        <div style={{ padding: "10px 16px", borderBottom: `1px solid ${c.border}`, display: "flex", alignItems: "center", gap: "12px", background: c.bg, flexShrink: 0 }}>
+        <div style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: "12px", background: c.bg, flexShrink: 0 }}>
           <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "5px", color: c.text2, fontSize: "18px" }}>☰</button>
           <span style={{ fontSize: "13px", color: c.text2, fontWeight: "500" }}>{activeChat?.title || "New conversation"}</span>
         </div>
