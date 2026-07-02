@@ -279,7 +279,7 @@ function App() {
 
           {/* Welcome screen — LEFT ALIGNED */}
           {messages.length === 0 && !isStreaming && (
-            <div style={{ padding: "40px 24px" }}>
+            <div style={{ padding: "40px 8px" }}>
               <p style={{ fontSize: "22px", fontWeight: "600", marginBottom: "8px" }}>RSD Enterprise AI</p>
               <p style={{ fontSize: "14px", color: c.text2, marginBottom: "20px", lineHeight: "1.6" }}>
                 Sales data ke baare mein kuch bhi poochho
@@ -301,7 +301,7 @@ function App() {
           )}
 
           {/* Messages — FULL WIDTH, LEFT ALIGNED */}
-          <div style={{ padding: "0 24px" }}>
+          <div style={{ padding: "0 8px" }}>
             {messages.map((m, i) => (
               <div key={i}>
                 {m.role === "user" ? (
