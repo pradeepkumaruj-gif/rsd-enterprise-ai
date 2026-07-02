@@ -102,7 +102,7 @@ function App() {
   }
 
   const renderTable = (lines) => {
-    const rows = lines.filter(l => !l.match(/^\|[\s-|]+\|$/))
+    const rows = lines.filter(l => !l.match(/^\|[\s-|]+\|$/) && !l.includes('---'))
     if (!rows.length) return ''
     const bdr = isDark ? '#3a3a3a' : '#e5e5e5'
     const hBg = isDark ? '#252525' : '#fafafa'
@@ -390,7 +390,7 @@ function App() {
           )}
 
           {/* Message list — Claude style */}
-          <div style={{ maxWidth: "680px", margin: "0 auto", padding: "28px 24px 0" }}>
+          <div style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 24px 0" }}>
             {messages.map((m, i) => (
               <div key={i}>
                 {m.role === "user" ? (
