@@ -438,7 +438,7 @@ function App() {
 
         {/* Input */}
         <div style={{ padding: "12px 24px 18px", background: c.bg, flexShrink: 0 }}>
-          <div style={{ maxWidth: "680px", margin: "0 auto" }}>
+          <div style={{ maxWidth: "100%" }}>
             <div style={{
               background: c.inputBg, borderRadius: "12px",
               border: `1px solid ${c.border}`,
