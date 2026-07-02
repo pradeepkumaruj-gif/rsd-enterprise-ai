@@ -390,7 +390,7 @@ function App() {
           )}
 
           {/* Message list — Claude style */}
-          <div style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 24px 0" }}>
+          <div style={{ padding: "28px 24px 0" }}>
             {messages.map((m, i) => (
               <div key={i}>
                 {m.role === "user" ? (
