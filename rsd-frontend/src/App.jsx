@@ -391,7 +391,7 @@ function App() {
           onClick={() => setShowSettings(false)}>
           <div style={{ background: c.bg, borderRadius: "14px", width: "100%", maxWidth: "400px", border: `1px solid ${c.border}`, boxShadow: "0 20px 50px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${c.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ padding: "16px 20px", , display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontWeight: "600", fontSize: "15px" }}>Settings</span>
               <button onClick={() => setShowSettings(false)} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "18px", color: c.text2 }}>✕</button>
             </div>
