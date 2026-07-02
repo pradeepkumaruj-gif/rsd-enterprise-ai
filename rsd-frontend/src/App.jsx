@@ -22,7 +22,7 @@ function App() {
 
   const c = {
     bg: isDark ? "#1e1e1e" : "#ffffff",
-    sidebar: isDark ? "#1a1a1a" : "#f7f7f7",
+    sidebar: isDark ? "#1a1a1a" : "#ffffff",
     border: isDark ? "#2e2e2e" : "#e8e8e8",
     text: isDark ? "#e8e8e8" : "#1a1a1a",
     text2: isDark ? "#777" : "#888",
