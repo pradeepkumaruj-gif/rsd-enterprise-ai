@@ -211,7 +211,7 @@ function App() {
       {/* SIDEBAR */}
       {sidebarOpen && (
         <div style={{
-          width: "240px", minWidth: "240px", background: c.sidebar,
+          width: "200px", minWidth: "200px", background: c.sidebar,
           borderRight: `1px solid ${c.border}`, display: "flex", flexDirection: "column",
           height: "100vh", overflow: "hidden",
           position: window.innerWidth < 768 ? "fixed" : "relative", zIndex: 50,
