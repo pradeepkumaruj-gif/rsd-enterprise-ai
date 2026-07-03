@@ -221,7 +221,7 @@ export default function App() {
       {sidebarOpen && (
         <div style={{
           width: "260px", minWidth: "260px", background: c.sidebar,
-          borderRight: `1px solid ${c.border}`, display: "flex", flexDirection: "column",
+          display: "flex", flexDirection: "column",
           height: "100vh", overflow: "hidden",
           position: window.innerWidth < 768 ? "fixed" : "relative", zIndex: 50,
         }}>
