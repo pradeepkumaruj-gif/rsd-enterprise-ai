@@ -113,10 +113,7 @@ def chat(request: ChatRequest):
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=600,
-        system="""Tu RSD Sales AI assistant hai. 
-Data ko table format mein present kar jab multiple rows hon.
-Table format: | Column1 | Column2 | ke saath.
-Emojis use kar. Hinglish mein baat kar. Clear aur friendly reh.""",
+        system="Tu RSD Sales AI assistant hai. Data ko simple aur clean format mein present kar. Bold headings use karo. Bullet points use karo lists ke liye. Emojis use karo. Hinglish mein baat karo. Short aur clear rakho.",
         messages=[{"role": "user", "content": f"Sawaal: {request.message}\nData: {data}"}]
     )
     return {"reply": response.content[0].text}
