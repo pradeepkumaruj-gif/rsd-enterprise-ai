@@ -128,6 +128,7 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
   "metric": "sum",
   "group_by": ["dimension1", "dimension2"],
   "filters": {{"dimension": "value to match", "dimension2": "value2"}},
+  "share_filter": {{}},
   "top_n": 10,
   "sort_desc": true,
   "count_dimension": null
@@ -146,9 +147,13 @@ ise liquor_type mein mat daalo aur "Whisky" alag se filter mat karo.
 Mixed Alcoholic Beverages) -- jab user generic "Whisky" ya "Rum" bole (bina Premium/Regular/Semi
 qualifier ke), tab liquor_type use karo.
 
-"metric" do types ka ho sakta hai:
+"metric" teen types ka ho sakta hai:
 - "sum" (default) -- sale_qty_in_box ka total. Yeh QUANTITY hai (boxes), currency NAHI hai.
 - "count_distinct" -- jab user "kitne total X hai" jaisa pooche (jaise "total kitne shop code hai", "kitne alag brand hain"). Is case mein "count_dimension" field mein woh dimension daalo jiska unique count chahiye, aur group_by/filters normal rahenge.
+- "market_share" -- jab user kisi specific brand/product/company ka "market share" ya "% hissa" total sale mein poochta hai (jaise "Dennis ka market share kya hai har shop mein"). Is case mein:
+  - "filters" mein overall context filters daalo (jaise month)
+  - "share_filter" mein woh specific dimension+value daalo jiska share nikalna hai (jaise {{"brand": "Dennis"}})
+  - "group_by" mein woh dimensions daalo jiske hisaab se share dikhana hai (jaise shop-wise ya department-wise share ke liye ["party", "department"]; agar sirf ek overall number chahiye, group_by empty [] rakho)
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
@@ -194,6 +199,41 @@ def run_query(spec: dict) -> str:
             unique_count = filtered[col].nunique()
             return f"Total unique {count_dim}: {unique_count}"
         return "count_dimension valid nahi thi."
+
+    # Market share: what % of total sale (within each group) does a specific
+    # brand/product/company/etc make up. E.g. "Dennis ka market share har
+    # shop mein" -> for each shop, (Dennis qty / total qty in that shop) * 100
+    if spec.get("metric") == "market_share":
+        share_filter = spec.get("share_filter") or {}
+        subset = filtered
+        for dim, value in share_filter.items():
+            col = DIMENSIONS.get(dim)
+            if col and col in subset.columns:
+                subset = subset[subset[col].astype(str).str.contains(str(value), case=False, na=False)]
+
+        group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
+        top_n = spec.get("top_n") or 10
+        sort_desc = spec.get("sort_desc", True)
+
+        if not group_by:
+            total = filtered[COL_QTY].sum()
+            subset_total = subset[COL_QTY].sum()
+            share = (subset_total / total * 100) if total else 0
+            return (f"Subset Qty: {subset_total}, Total Qty: {total}, "
+                    f"Market Share: {share:.2f}%")
+
+        total_by_group = filtered.groupby(group_by)[COL_QTY].sum()
+        subset_by_group = subset.groupby(group_by)[COL_QTY].sum()
+        combined = pd.DataFrame({
+            'subset_qty': subset_by_group,
+            'total_qty': total_by_group,
+        }).fillna(0)
+        combined['market_share_pct'] = (
+            combined['subset_qty'] / combined['total_qty'].replace(0, pd.NA) * 100
+        ).round(2)
+        combined = combined.sort_values('market_share_pct', ascending=not sort_desc)
+        combined = combined.head(top_n)
+        return combined.to_string()
 
     group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
     top_n = spec.get("top_n") or 10
