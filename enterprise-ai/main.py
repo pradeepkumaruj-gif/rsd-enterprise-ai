@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import anthropic
 import os
+import threading
 import pandas as pd
 from supabase import create_client
 
@@ -24,8 +25,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def fetch_all_rows(table_name: str) -> pd.DataFrame:
-    """Supabase returns max 1000 rows per call, so page through until done.
-    Runs once at startup -- for 300K+ rows this takes a few seconds."""
+    """Supabase returns max 1000 rows per call, so page through until done."""
     all_rows = []
     page_size = 1000
     start = 0
@@ -41,9 +41,28 @@ def fetch_all_rows(table_name: str) -> pd.DataFrame:
     return pd.DataFrame(all_rows)
 
 
-print("Loading delhi_industry data from Supabase...")
-df = fetch_all_rows("delhi_industry")
-print(f"Loaded {len(df)} rows.")
+# df starts empty -- the server responds to requests immediately (so Railway's
+# health check passes right away), while the real data loads in a background
+# thread. Loading 300K+ rows via paginated API calls takes a couple of
+# minutes; doing this at import time blocked the whole server from
+# responding, which is why Railway reported "Application failed to respond".
+df = pd.DataFrame()
+data_loading_status = "loading"  # loading -> ready | failed
+
+
+def load_data_in_background():
+    global df, data_loading_status
+    try:
+        print("Loading delhi_industry data from Supabase...")
+        df = fetch_all_rows("delhi_industry")
+        data_loading_status = "ready"
+        print(f"Loaded {len(df)} rows.")
+    except Exception as e:
+        data_loading_status = "failed"
+        print(f"Failed to load data: {e}")
+
+
+threading.Thread(target=load_data_in_background, daemon=True).start()
 
 # Column name shortcuts (delhi_industry schema uses snake_case)
 COL_TSE = 'salesman_tse'
@@ -63,20 +82,28 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def home():
-    return {"message": "RSD Enterprise AI Ready! 🚀", "rows_loaded": len(df)}
+    return {
+        "message": "RSD Enterprise AI Ready! 🚀",
+        "data_status": data_loading_status,
+        "rows_loaded": len(df),
+    }
 
 
 @app.post("/refresh")
 def refresh_data():
     """Re-pull the latest data from Supabase without restarting the server.
     Call this after loading a new month's CSV via load_to_delhi_industry.py"""
-    global df
-    df = fetch_all_rows("delhi_industry")
-    return {"message": "Data refreshed", "rows_loaded": len(df)}
+    threading.Thread(target=load_data_in_background, daemon=True).start()
+    return {"message": "Refresh started in background"}
 
 
 @app.post("/chat")
 def chat(request: ChatRequest):
+    if data_loading_status == "loading":
+        return {"reply": "⏳ Data abhi Supabase se load ho raha hai, thodi der mein try karo (1-2 minute)."}
+    if data_loading_status == "failed" or df.empty:
+        return {"reply": "⚠️ Data load nahi ho paya. Backend logs check karo."}
+
     question = request.message.lower()
 
     if 'top tse' in question or 'best tse' in question:
