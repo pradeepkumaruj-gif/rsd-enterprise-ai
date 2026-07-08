@@ -76,6 +76,8 @@ COL_LIQUOR_TYPE = 'liquor_type'
 COL_SHOP_CODE = 'shop_code'
 COL_CATEGORY = 'category'
 COL_COMPANY = 'company_name'
+COL_SEGMENT = 'segment'
+COL_BD_SEGMENT = 'bd_segment'
 
 
 class ChatRequest(BaseModel):
@@ -115,20 +117,38 @@ DIMENSIONS = {
     'shop_code': COL_SHOP_CODE,
     'category': COL_CATEGORY,
     'company': COL_COMPANY,
+    'segment': COL_SEGMENT,
+    'bd_segment': COL_BD_SEGMENT,
 }
 
 QUERY_PARSER_SYSTEM = f"""Tu ek query parser hai RSD liquor sales dataset ke liye.
 User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi):
 
 {{
+  "metric": "sum",
   "group_by": ["dimension1", "dimension2"],
   "filters": {{"dimension": "value to match", "dimension2": "value2"}},
   "top_n": 10,
-  "sort_desc": true
+  "sort_desc": true,
+  "count_dimension": null
 }}
 
 Available dimensions (sirf yehi use karo): {list(DIMENSIONS.keys())}
-Metric hamesha "sale_qty_in_box" ka sum hota hai -- ismein koi choice nahi.
+
+IMPORTANT -- "bd_segment" dimension ke real values yeh hain (inhe EXACT ek hi value maano, todo mat):
+"Semi Pre Whisky", "Semi Pre Vodka", "Regular Whisky", "Premium Whisky", "Super Pre Whisky",
+"Scotch", "Premium Vodka", "Breezer", "Wine", "Single Malt", "Premium Gin", "Super Premium Gin",
+"Premium Rum", "Liqueur", "RTD", "Tequila", "Super Pre Rum", "Brandy", "Semi Pre Rum"
+Agar user "Semi Pre Whisky" ya "Regular Whisky" jaisa kuch bole, yeh EK filter hai bd_segment pe --
+ise liquor_type mein mat daalo aur "Whisky" alag se filter mat karo.
+
+"liquor_type" dimension broader hai (sirf: Whisky, Vodka, Alcopop, Wine, Gin, Rum, Liqueur, Brandy,
+Mixed Alcoholic Beverages) -- jab user generic "Whisky" ya "Rum" bole (bina Premium/Regular/Semi
+qualifier ke), tab liquor_type use karo.
+
+"metric" do types ka ho sakta hai:
+- "sum" (default) -- sale_qty_in_box ka total. Yeh QUANTITY hai (boxes), currency NAHI hai.
+- "count_distinct" -- jab user "kitne total X hai" jaisa pooche (jaise "total kitne shop code hai", "kitne alag brand hain"). Is case mein "count_dimension" field mein woh dimension daalo jiska unique count chahiye, aur group_by/filters normal rahenge.
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
@@ -136,6 +156,7 @@ Rules:
 - Agar do mahino ka comparison chahiye ("April vs May"), month ko group_by mein daalo, filter mein nahi
 - top_n default 10, agar "top 5" jaisa kuch bola hai to wahi number daalo
 - Agar sawaal total/overall pucha hai bina kisi grouping ke, group_by ko empty list [] rakho
+- "kitne total/alag/unique X hai" jaise sawaalon ke liye metric="count_distinct" use karo, group_by ko empty [] rakho
 """
 
 
@@ -163,13 +184,24 @@ def run_query(spec: dict) -> str:
     if filtered.empty:
         return "Is filter ke liye koi data nahi mila."
 
+    # "kitne total/alag X hai" style questions -- count actual unique values,
+    # not just the top-N shown in a group_by (that was Bug: system was
+    # mislabeling "top 10 rows" as "total unique count", which is wrong).
+    if spec.get("metric") == "count_distinct":
+        count_dim = spec.get("count_dimension")
+        col = DIMENSIONS.get(count_dim)
+        if col and col in filtered.columns:
+            unique_count = filtered[col].nunique()
+            return f"Total unique {count_dim}: {unique_count}"
+        return "count_dimension valid nahi thi."
+
     group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
     top_n = spec.get("top_n") or 10
     sort_desc = spec.get("sort_desc", True)
 
     if not group_by:
         total = filtered[COL_QTY].sum()
-        return f"Total Sale Qty: {total}"
+        return f"Total Sale Qty (boxes): {total}"
 
     result = filtered.groupby(group_by)[COL_QTY].sum()
     result = result.sort_values(ascending=not sort_desc)
@@ -195,7 +227,13 @@ def chat(request: ChatRequest):
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=600,
-        system="Tu RSD Sales AI assistant hai. Data ko markdown table format mein present kar jab multiple columns hon. | col1 | col2 | format use karo. Emojis use karo. Hinglish mein baat karo.",
+        system=(
+            "Tu RSD Sales AI assistant hai. Data 'sale_qty_in_box' hai -- yeh BOXES ki QUANTITY hai, "
+            "RUPEES/CURRENCY NAHI hai. Kabhi bhi ₹ ya 'Rs' symbol use mat karna is data ke liye -- "
+            "sirf 'units' ya 'boxes' bolna. Data ko markdown table format mein present kar jab multiple "
+            "columns hon. | col1 | col2 | format use karo. Emojis use karo. Hinglish mein baat karo. "
+            "Agar data mein 'Total unique X: N' jaisa kuch mile, usko as-is present karo -- number mat badalna."
+        ),
         messages=[{"role": "user", "content": f"Sawaal: {request.message}\nData: {data}"}]
     )
     return {"reply": response.content[0].text}
