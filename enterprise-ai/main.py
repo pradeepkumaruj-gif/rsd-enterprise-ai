@@ -74,6 +74,8 @@ COL_PRODUCT = 'item_name_as_per_industry_data'
 COL_QTY = 'sale_qty_in_box'
 COL_LIQUOR_TYPE = 'liquor_type'
 COL_SHOP_CODE = 'shop_code'
+COL_CATEGORY = 'category'
+COL_COMPANY = 'company_name'
 
 
 class ChatRequest(BaseModel):
@@ -97,6 +99,84 @@ def refresh_data():
     return {"message": "Refresh started in background"}
 
 
+import json
+
+# Maps friendly dimension names (what Claude will use in its query spec) to
+# actual dataframe column names. Keeping this mapping means we never trust
+# raw column names coming back from Claude -- only these known-safe keys.
+DIMENSIONS = {
+    'month': COL_MONTH,
+    'department': COL_DEPT,
+    'tse': COL_TSE,
+    'party': COL_PARTY,
+    'brand': COL_BRAND,
+    'product': COL_PRODUCT,
+    'liquor_type': COL_LIQUOR_TYPE,
+    'shop_code': COL_SHOP_CODE,
+    'category': COL_CATEGORY,
+    'company': COL_COMPANY,
+}
+
+QUERY_PARSER_SYSTEM = f"""Tu ek query parser hai RSD liquor sales dataset ke liye.
+User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi):
+
+{{
+  "group_by": ["dimension1", "dimension2"],
+  "filters": {{"dimension": "value to match", "dimension2": "value2"}},
+  "top_n": 10,
+  "sort_desc": true
+}}
+
+Available dimensions (sirf yehi use karo): {list(DIMENSIONS.keys())}
+Metric hamesha "sale_qty_in_box" ka sum hota hai -- ismein koi choice nahi.
+
+Rules:
+- group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
+- filters mein JITNE BHI dimensions ka specific value user ne mention kiya ho, sab daalo (multiple filters ek saath chal sakte hain -- jaise "April mein DCCWS department ka Whisky" -> {{"month": "Apr", "department": "DCCWS", "liquor_type": "Whisky"}})
+- Agar do mahino ka comparison chahiye ("April vs May"), month ko group_by mein daalo, filter mein nahi
+- top_n default 10, agar "top 5" jaisa kuch bola hai to wahi number daalo
+- Agar sawaal total/overall pucha hai bina kisi grouping ke, group_by ko empty list [] rakho
+"""
+
+
+def parse_query_with_claude(question: str) -> dict:
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=300,
+        system=QUERY_PARSER_SYSTEM,
+        messages=[{"role": "user", "content": question}],
+    )
+    text = response.content[0].text.strip()
+    text = text.replace("```json", "").replace("```", "").strip()
+    return json.loads(text)
+
+
+def run_query(spec: dict) -> str:
+    filtered = df
+
+    # Apply filters (partial, case-insensitive match -- so "dccws" or "DCCWS" both work)
+    for dim, value in (spec.get("filters") or {}).items():
+        col = DIMENSIONS.get(dim)
+        if col and col in filtered.columns:
+            filtered = filtered[filtered[col].astype(str).str.contains(str(value), case=False, na=False)]
+
+    if filtered.empty:
+        return "Is filter ke liye koi data nahi mila."
+
+    group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
+    top_n = spec.get("top_n") or 10
+    sort_desc = spec.get("sort_desc", True)
+
+    if not group_by:
+        total = filtered[COL_QTY].sum()
+        return f"Total Sale Qty: {total}"
+
+    result = filtered.groupby(group_by)[COL_QTY].sum()
+    result = result.sort_values(ascending=not sort_desc)
+    result = result.head(top_n)
+    return result.to_string()
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     if data_loading_status == "loading":
@@ -104,77 +184,13 @@ def chat(request: ChatRequest):
     if data_loading_status == "failed" or df.empty:
         return {"reply": "⚠️ Data load nahi ho paya. Backend logs check karo."}
 
-    question = request.message.lower()
-
-    if 'top tse' in question or 'best tse' in question:
-        result = df.groupby(COL_TSE)[COL_QTY].sum().sort_values(ascending=False).head(3)
-        data = f"Top 3 TSE:\n{result.to_string()}"
-    elif 'tse' in question and ('month' in question or 'mahina' in question):
-        result = df.pivot_table(index=COL_TSE, columns=COL_MONTH, values=COL_QTY, aggfunc='sum', fill_value=0)
-        result['Total'] = result.sum(axis=1)
-        result = result.sort_values('Total', ascending=False)
-        result.columns.name = None
-        data = f"TSE Month wise Sales:\n{result.to_string()}"
-    elif 'tse' in question and ('dept' in question or 'department' in question):
-        result = df.groupby([COL_TSE, COL_DEPT])[COL_QTY].sum().reset_index()
-        result = result.sort_values(COL_QTY, ascending=False)
-        data = f"TSE Department wise Sales:\n{result.to_string(index=False)}"
-    elif 'tse' in question or 'sab tse' in question or 'all tse' in question or 'sales man' in question:
-        result = df.groupby(COL_TSE)[COL_QTY].sum().sort_values(ascending=False)
-        data = f"All TSE Performance:\n{result.to_string()}"
-    elif ('dept' in question or 'department' in question or 'vibhag' in question) and ('month' in question or 'mahina' in question):
-        result = df.pivot_table(index=COL_DEPT, columns=COL_MONTH, values=COL_QTY, aggfunc='sum', fill_value=0)
-        result['Total'] = result.sum(axis=1)
-        result = result.sort_values('Total', ascending=False)
-        result.columns.name = None
-        data = f"Department Month wise Sales:\n{result.to_string()}"
-    elif 'dept' in question or 'department' in question or 'vibhag' in question:
-        result = df.groupby(COL_DEPT)[COL_QTY].sum().sort_values(ascending=False)
-        data = f"Department Sales:\n{result.to_string()}"
-    elif 'party' in question and ('month' in question or 'mahina' in question):
-        result = df.pivot_table(index=COL_PARTY, columns=COL_MONTH, values=COL_QTY, aggfunc='sum', fill_value=0)
-        result['Total'] = result.sum(axis=1)
-        result = result.sort_values('Total', ascending=False).head(10)
-        result.columns.name = None
-        data = f"Party Month wise Sales:\n{result.to_string()}"
-    elif 'top party' in question or 'best party' in question:
-        result = df.groupby(COL_PARTY)[COL_QTY].sum().sort_values(ascending=False).head(5)
-        data = f"Top 5 Parties:\n{result.to_string()}"
-    elif 'party' in question:
-        result = df.groupby(COL_PARTY)[COL_QTY].sum().sort_values(ascending=False).head(10)
-        data = f"Top 10 Parties:\n{result.to_string()}"
-    elif 'brand' in question and ('month' in question or 'mahina' in question):
-        result = df.pivot_table(index=COL_BRAND, columns=COL_MONTH, values=COL_QTY, aggfunc='sum', fill_value=0)
-        result['Total'] = result.sum(axis=1)
-        result = result.sort_values('Total', ascending=False).head(10)
-        result.columns.name = None
-        data = f"Brand wise Month wise Sales:\n{result.to_string()}"
-    elif 'brand' in question and ('dept' in question or 'department' in question):
-        result = df.groupby([COL_DEPT, COL_BRAND])[COL_QTY].sum().reset_index()
-        result = result.sort_values(COL_QTY, ascending=False).head(15)
-        data = f"Brand wise Department wise Sales:\n{result.to_string(index=False)}"
-    elif 'brand' in question:
-        result = df.groupby(COL_BRAND)[COL_QTY].sum().sort_values(ascending=False).head(10)
-        data = f"Top Brands:\n{result.to_string()}"
-    elif 'month' in question or 'mahina' in question or 'monthly' in question:
-        result = df.groupby(COL_MONTH)[COL_QTY].sum().sort_values(ascending=False)
-        data = f"Monthly Sales:\n{result.to_string()}"
-    elif 'liquor' in question or 'type' in question:
-        result = df.groupby(COL_LIQUOR_TYPE)[COL_QTY].sum().sort_values(ascending=False)
-        data = f"Liquor Type wise Sales:\n{result.to_string()}"
-    elif 'product' in question or 'item' in question:
-        result = df.groupby(COL_PRODUCT)[COL_QTY].sum().sort_values(ascending=False).head(15)
-        data = f"Top Products:\n{result.to_string()}"
-    elif 'total' in question or 'kul' in question:
-        total = df[COL_QTY].sum()
-        data = f"Total Sales Qty (all boxes): {total}"
-    elif 'shop code' in question or 'shop' in question:
-        result = df.groupby(COL_SHOP_CODE)[COL_QTY].sum().sort_values(ascending=False).head(10)
-        data = f"Top Shops by Sale Qty:\n{result.to_string()}"
-    else:
-        data = ("RSD Sales Data available (Delhi Industry, April + May 2026). Puchho: "
-                "Top TSE, TSE Month wise, Department, Party Month wise, Brand Month wise, "
-                "Liquor Type, Product, Shop Code, Total")
+    try:
+        spec = parse_query_with_claude(request.message)
+        data = run_query(spec)
+    except Exception as e:
+        print(f"Query parse/run failed: {e}")
+        data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
+                "'DCCWS department ka top brand', 'May vs April total', etc.")
 
     response = client.messages.create(
         model="claude-haiku-4-5",
