@@ -271,6 +271,57 @@ Rules:
 """
 
 
+def dicts_to_markdown_table(records: list) -> str:
+    """Builds a markdown table directly from a list of dicts -- pure Python
+    string formatting, zero LLM involvement. This is the ONLY place table
+    numbers get written out, guaranteeing they exactly match what's in the
+    data (an LLM asked to transcribe a table can occasionally slip a digit,
+    which is unacceptable for a business analytics tool)."""
+    if not records:
+        return "_Koi data nahi mila is query ke liye._"
+    columns = list(records[0].keys())
+    header = "| " + " | ".join(str(c).replace("_", " ").title() for c in columns) + " |"
+    sep = "| " + " | ".join("---" for _ in columns) + " |"
+    rows = []
+    for r in records:
+        rows.append("| " + " | ".join(str(r.get(c, "")) for c in columns) + " |")
+    return "\n".join([header, sep] + rows)
+
+
+def render_data_deterministically(data) -> str:
+    """Converts whatever run_query/run_special_intent returned (string,
+    list of records, or a result dict) into final display text -- entirely
+    in Python. No LLM ever re-types a number here."""
+    if isinstance(data, str):
+        return data
+
+    if isinstance(data, list):
+        return dicts_to_markdown_table(data)
+
+    if isinstance(data, dict):
+        if data.get("found") is False:
+            lines = [f"❌ {data.get('message', 'Data nahi mila.')}"]
+            for key in ("similar_brands", "similar_companies"):
+                if data.get(key):
+                    lines.append("Kya aapka matlab in mein se tha: " + ", ".join(data[key]))
+            return "\n".join(lines)
+
+        sections = []
+        for key, value in data.items():
+            if key == "found":
+                continue
+            label = key.replace("_", " ").title()
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                sections.append(f"**{label}:**\n\n{dicts_to_markdown_table(value)}")
+            elif isinstance(value, list):
+                sections.append(f"**{label}:** {', '.join(str(v) for v in value)}")
+            else:
+                sections.append(f"**{label}:** {value}")
+        return "\n\n".join(sections)
+
+    return str(data)
+
+
 def parse_query_with_claude(question: str) -> dict:
     response = client.messages.create(
         model="claude-haiku-4-5",
@@ -283,7 +334,7 @@ def parse_query_with_claude(question: str) -> dict:
     return json.loads(text)
 
 
-def run_query(spec: dict) -> str:
+def run_query(spec: dict):
     filtered = df
 
     # Apply filters -- each value is first fuzzy-resolved to the closest
@@ -345,7 +396,7 @@ def run_query(spec: dict) -> str:
         ).round(2)
         combined = combined.sort_values('market_share_pct', ascending=not sort_desc)
         combined = combined.head(top_n)
-        return combined.to_string()
+        return combined.reset_index().to_dict('records')
 
     group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
     top_n = spec.get("top_n") or 10
@@ -358,7 +409,8 @@ def run_query(spec: dict) -> str:
     result = filtered.groupby(group_by)[COL_QTY].sum()
     result = result.sort_values(ascending=not sort_desc)
     result = result.head(top_n)
-    return result.to_string()
+    result = result.rename('total_qty')
+    return result.reset_index().to_dict('records')
 
 
 import difflib
@@ -427,7 +479,7 @@ def resolve_company_name(partial_name: str) -> str:
     return fuzzy_resolve_value(partial_name, COL_COMPANY)
 
 
-def run_special_intent(intent: str, params: dict) -> str:
+def run_special_intent(intent: str, params: dict):
     """Routes a parsed intent to the matching SmartQueryEngine method.
     Returns a JSON string of the result (or an error message string)."""
     engine = SmartQueryEngine(df)  # cheap wrapper around current df, rebuilt fresh each call
@@ -530,7 +582,7 @@ def run_special_intent(intent: str, params: dict) -> str:
         else:
             return f"Unknown intent: {intent}"
 
-        return json.dumps(result, default=str)
+        return result
 
     except KeyError as e:
         return f"Zaroori parameter missing: {e}"
@@ -558,29 +610,40 @@ def chat(request: ChatRequest):
         data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
                 "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")
 
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=700,
-        system=(
-            "Tu RSD Sales AI assistant hai. Data 'sale_qty_in_box' hai -- yeh BOXES ki QUANTITY hai, "
-            "RUPEES/CURRENCY NAHI hai. Kabhi bhi ₹ ya 'Rs' symbol use mat karna is data ke liye -- "
-            "sirf 'units' ya 'boxes' bolna. Data kabhi plain text ho sakta hai, kabhi JSON (structured "
-            "result) -- dono cases mein data ko markdown table format mein present kar jab multiple "
-            "columns/fields hon. | col1 | col2 | format use karo. Emojis use karo. Hinglish mein baat karo. "
-            "JSON mein agar 'found': false ho, to clearly bolo ki data nahi mila, aur agar 'similar_brands' "
-            "jaisa suggestion mile to woh dikhao. Numbers ko JSON se as-is lo -- kabhi khud se koi number, "
-            "percentage, ya total calculate/invent mat karo, sirf jo diya gaya hai wahi dikhao. "
-            "GENERAL RULE: jab bhi data mein multiple items ki list/array ho (brands, shops, gainers, "
-            "losers, rankings, etc.), unhe HAMESHA EK HI markdown table mein dikhao -- har item ek ROW, "
-            "fields COLUMNS. Kabhi bhi ek-ek item ke liye alag paragraph/block mat banao. Agar kisi ek "
-            "item ka data na mile (found:false), uski row mein 'Not Found' likh do, baaki items normal "
-            "dikhao usi table mein -- format kabhi mat todo. "
-            "CRITICAL: agar JSON mein koi field ek chhoti list/array hai jisme actual descriptive value "
-            "hai (jaise 'bd_segment': ['Regular Whisky'], 'company_name': ['XYZ Ltd']), toh "
-            "us list ke andar ki ASLI VALUE seedha bata do (jaise 'Segment: Whisky Segment Dennis') -- "
-            "kabhi 'unclear', '1 unique segment', ya 'specific name visible nahi hai' jaisa mat bolo. "
-            "Value JSON mein saaf maujood hai, use hamesha directly quote karo."
-        ),
-        messages=[{"role": "user", "content": f"Sawaal: {request.message}\nData: {data}"}]
-    )
-    return {"reply": response.content[0].text}
+    # CRITICAL: the table/numbers are built here, in pure Python, from the
+    # actual data -- never by asking an LLM to "re-type" or "format" them.
+    # An LLM transcribing a table can occasionally alter a digit, which is
+    # unacceptable for a business analytics tool (verified this happened:
+    # a live query showed 27,837/21,121 when the real Supabase numbers were
+    # 31,536/20,081 -- the calculation was correct, but the presentation
+    # layer had silently changed the numbers while "formatting" them).
+    deterministic_text = render_data_deterministically(data)
+
+    # Claude's ONLY job now is a short 1-2 line insight/comment -- it is
+    # explicitly told not to repeat any numbers, since those are already
+    # rendered exactly, above.
+    try:
+        insight_response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=150,
+            system=(
+                "Tu ek chhota insight-generator hai RSD liquor sales data ke liye. Tumhe neeche "
+                "diya gaya data ek observation ke liye dikhaya ja raha hai -- ISE DOBARA MAT LIKHO, "
+                "koi table ya number repeat mat karo (woh already user ko dikh chuka hai). Sirf EK "
+                "CHHOTA 1-2 line ka Hinglish insight/comment do jo is data se related ho (jaise "
+                "'yeh brand apne segment ka leader hai' ya 'yeh decline chinta ka vishay hai'). "
+                "Emoji use karo. Agar data mein 'not found' / error ho, kuch mat likho, khaali "
+                "string return karo."
+            ),
+            messages=[{
+                "role": "user",
+                "content": f"Sawaal: {request.message}\n\nData (sirf reference ke liye, dobara mat likhna):\n{deterministic_text[:2000]}"
+            }],
+        )
+        insight = insight_response.content[0].text.strip()
+    except Exception as e:
+        print(f"Insight generation failed (non-critical): {e}")
+        insight = ""
+
+    final_reply = deterministic_text if not insight else f"{deterministic_text}\n\n{insight}"
+    return {"reply": final_reply}
