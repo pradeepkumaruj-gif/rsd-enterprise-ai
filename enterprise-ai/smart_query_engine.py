@@ -1,0 +1,433 @@
+"""
+RSD Enterprise AI - Smart Query Engine
+Backend functions for liquor sales data analysis (Delhi Industry data)
+
+Usage:
+    import pandas as pd
+    from smart_query_engine import SmartQueryEngine
+
+    df = pd.read_csv('DI_MAY_26.csv')
+    engine = SmartQueryEngine(df)
+
+    result = engine.brand_report('DENNIS SPECIAL GOLD WHISKY')
+"""
+
+import pandas as pd
+
+
+class SmartQueryEngine:
+    def __init__(self, df: pd.DataFrame):
+        self.df = df
+        self.total_market = df['sale_qty_in_box'].sum()
+
+    # ------------------------------------------------------------------
+    # a) Brand-specific lookup
+    # ------------------------------------------------------------------
+    def brand_report(self, brand_name: str, top_shops: int = 10):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            similar = df[df['brand_name_as_per_company_data'].str.contains(
+                brand_name.split()[0], case=False, na=False)]['brand_name_as_per_company_data'].unique()
+            return {
+                'found': False,
+                'message': f'Brand "{brand_name}" not found.',
+                'similar_brands': list(similar[:10])
+            }
+
+        bd_segment = sub['bd_segment'].unique()
+        segment = sub['segment'].unique()
+        brand_qty = sub['sale_qty_in_box'].sum()
+        bd_total = df[df['bd_segment'].isin(bd_segment)]['sale_qty_in_box'].sum()
+        shop_count = sub['shop_code'].nunique()
+
+        shop_sales = (sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
+                      .sum().sort_values(ascending=False).head(top_shops))
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'company_name': list(sub['company_name'].unique()),
+            'bd_segment': list(bd_segment),
+            'bd_segment_total_sale': int(bd_total),
+            'segment': list(segment),
+            'brand_sale_qty': int(brand_qty),
+            'brand_pct_within_bd_segment': float(round(brand_qty / bd_total * 100, 2)),
+            'brand_pct_of_market': float(round(brand_qty / self.total_market * 100, 2)),
+            'shops_selling_brand': shop_count,
+            'top_shops': shop_sales.reset_index().to_dict('records')
+        }
+
+    # ------------------------------------------------------------------
+    # b) BD Segment + Brand combo query
+    # ------------------------------------------------------------------
+    def smart_query(self, bd_segment: str, brand_name: str):
+        df = self.df
+        bd_sub = df[df['bd_segment'].str.upper() == bd_segment.upper()]
+        if bd_sub.empty:
+            return {'found': False, 'message': f'BD Segment "{bd_segment}" not found.'}
+
+        bd_total = bd_sub['sale_qty_in_box'].sum()
+        brand_sub = bd_sub[bd_sub['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if brand_sub.empty:
+            return {'found': False,
+                    'message': f'Brand "{brand_name}" not found within BD Segment "{bd_segment}".'}
+
+        brand_qty = brand_sub['sale_qty_in_box'].sum()
+        shop_count = brand_sub['shop_code'].nunique()
+        total_shops = bd_sub['shop_code'].nunique()
+
+        return {
+            'found': True,
+            'bd_segment': bd_segment,
+            'bd_segment_total_sale': int(bd_total),
+            'brand_sale_qty': int(brand_qty),
+            'brand_pct_within_bd_segment': float(round(brand_qty / bd_total * 100, 2)),
+            'brand_pct_of_market': float(round(brand_qty / self.total_market * 100, 2)),
+            'shops_selling_brand': shop_count,
+            'total_shops_in_segment': total_shops,
+            'brand_presence_pct': round(shop_count / total_shops * 100, 2)
+        }
+
+    # ------------------------------------------------------------------
+    # c) Market share by any dimension
+    # ------------------------------------------------------------------
+    def market_share(self, dimension: str, top_n: int = 10):
+        valid_dims = ['company_name', 'liquor_type', 'segment', 'bd_segment',
+                      'department', 'salesman_tse']
+        if dimension not in valid_dims:
+            return {'found': False, 'message': f'Invalid dimension. Choose from {valid_dims}'}
+
+        share = (self.df.groupby(dimension)['sale_qty_in_box'].sum()
+                 .sort_values(ascending=False))
+        share_pct = (share / self.total_market * 100).round(2)
+
+        return {
+            'found': True,
+            'dimension': dimension,
+            'total_market': int(self.total_market),
+            'ranking': {k: float(v) for k, v in share_pct.head(top_n).to_dict().items()},
+            'top_n_combined_share': float(round(share_pct.head(top_n).sum(), 2))
+        }
+
+    # ------------------------------------------------------------------
+    # d) Shop-wise comparison: target brand vs top competitors
+    # ------------------------------------------------------------------
+    def shop_comparison(self, brand_name: str, top_n: int = 10):
+        df = self.df
+        seg_val = df[df['brand_name_as_per_company_data'].str.upper() ==
+                     brand_name.upper()]['segment'].unique()
+        if len(seg_val) == 0:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        same_seg = df[df['segment'].isin(seg_val)]
+        other_brands = same_seg[same_seg['brand_name_as_per_company_data'].str.upper()
+                                 != brand_name.upper()]
+        top_competitors = (other_brands.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                            .sum().sort_values(ascending=False).head(top_n).index.tolist())
+
+        all_brands = [brand_name] + top_competitors
+        pivot = same_seg[same_seg['brand_name_as_per_company_data'].isin(all_brands)].pivot_table(
+            index=['shop_code', 'shop_name_as_per_company_data'],
+            columns='brand_name_as_per_company_data',
+            values='sale_qty_in_box', aggfunc='sum', fill_value=0
+        )
+        pivot = pivot[all_brands].sort_values(brand_name, ascending=False).reset_index()
+        pivot.insert(0, 'Rank', range(1, len(pivot) + 1))
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'top_competitors': top_competitors,
+            'total_shops': len(pivot),
+            'table': pivot.head(20).to_dict('records')  # top 20 shops for display
+        }
+
+    # ------------------------------------------------------------------
+    # e) Leading (>=threshold%) or long-tail (<threshold%) brands
+    #    Fixed to use ONLY "BD Segment" as the category dimension.
+    # ------------------------------------------------------------------
+    def brand_share_filter(self, bd_segment: str, threshold: float = 5.0, mode: str = 'above'):
+        df = self.df
+        category_type = 'bd_segment'
+
+        sub = df[df[category_type].str.upper() == bd_segment.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'{category_type} "{bd_segment}" not found.'}
+
+        cat_total = sub['sale_qty_in_box'].sum()
+        brand_pct = (sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum()
+                     / cat_total * 100).round(2).sort_values(ascending=False)
+
+        result = brand_pct[brand_pct >= threshold] if mode == 'above' else brand_pct[brand_pct < threshold]
+
+        return {
+            'found': True,
+            'category_type': category_type,
+            'category_value': bd_segment,
+            'category_total_sale': int(cat_total),
+            'mode': mode,
+            'threshold': threshold,
+            'brands': {k: float(v) for k, v in result.to_dict().items()},
+            'count': len(result),
+            'combined_share': float(round(result.sum(), 2)),
+            'total_brands_in_category': len(brand_pct)
+        }
+
+    # ------------------------------------------------------------------
+    # j) Single-brand Month-over-Month check
+    #    User enters ANY brand name -> tells current vs previous month
+    #    sale, and flags clearly if it's a brand-new entry (wasn't sold
+    #    in the previous month at all).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def brand_mom_check(brand_name: str, df_current: pd.DataFrame, df_previous: pd.DataFrame):
+        cur_sub = df_current[df_current['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        prev_sub = df_previous[df_previous['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+
+        if cur_sub.empty and prev_sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found in either month.'}
+
+        current_qty = int(cur_sub['sale_qty_in_box'].sum())
+        previous_qty = int(prev_sub['sale_qty_in_box'].sum())
+        change_qty = current_qty - previous_qty
+
+        is_new_entry = (previous_qty == 0 and current_qty > 0)
+        is_dropped = (current_qty == 0 and previous_qty > 0)
+
+        pct_change = None
+        if previous_qty > 0:
+            pct_change = float(round((change_qty / previous_qty) * 100, 2))
+
+        bd_segment = list(cur_sub['bd_segment'].unique()) if not cur_sub.empty else list(prev_sub['bd_segment'].unique())
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'bd_segment': bd_segment,
+            'current_month_qty': current_qty,
+            'previous_month_qty': previous_qty,
+            'change_qty': change_qty,
+            'pct_change': pct_change,
+            'is_new_entry': is_new_entry,
+            'is_dropped': is_dropped
+        }
+
+
+    # ------------------------------------------------------------------
+    # f) Compare multiple brands side-by-side (2 to 10 brands)
+    # ------------------------------------------------------------------
+    def compare_brands(self, brands: list, max_brands: int = 10):
+        if len(brands) < 2:
+            return {'found': False, 'message': 'Please provide at least 2 brands to compare.'}
+        if len(brands) > max_brands:
+            return {'found': False,
+                    'message': f'Maximum {max_brands} brands allowed for comparison. You gave {len(brands)}.'}
+
+        result = {}
+        for brand in brands:
+            sub = self.df[self.df['brand_name_as_per_company_data'].str.upper() == brand.upper()]
+            if sub.empty:
+                result[brand] = {'found': False, 'message': f'Brand "{brand}" not found.'}
+                continue
+            canonical_name = sub['brand_name_as_per_company_data'].iloc[0]
+            bd_seg = sub['bd_segment'].unique()
+            bd_total = self.df[self.df['bd_segment'].isin(bd_seg)]['sale_qty_in_box'].sum()
+            qty = sub['sale_qty_in_box'].sum()
+            overall_rank_series = (self.df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                                    .sum().sort_values(ascending=False))
+            overall_rank = int(overall_rank_series.index.get_loc(canonical_name) + 1)
+
+            result[brand] = {
+                'found': True,
+                'company': list(sub['company_name'].unique()),
+                'bd_segment': list(bd_seg),
+                'sale_qty': int(qty),
+                'pct_within_bd_segment': float(round(qty / bd_total * 100, 2)),
+                'pct_of_market': float(round(qty / self.total_market * 100, 2)),
+                'shops_selling': int(sub['shop_code'].nunique()),
+                'overall_rank': overall_rank
+            }
+
+        # Ranked summary table (only brands that were found), sorted by sale_qty
+        found_brands = {b: v for b, v in result.items() if v.get('found')}
+        ranking = sorted(found_brands.items(), key=lambda x: x[1]['sale_qty'], reverse=True)
+        summary_table = [
+            {'rank': i + 1, 'brand': b, **{k: v for k, v in data.items() if k != 'found'}}
+            for i, (b, data) in enumerate(ranking)
+        ]
+
+        return {
+            'found': True,
+            'brands_compared': len(brands),
+            'details': result,
+            'summary_table': summary_table
+        }
+
+    # ------------------------------------------------------------------
+    # g) Cross-reference: Brand A's top shops -> check Brand B's sale there
+    # ------------------------------------------------------------------
+    def cross_reference_shops(self, primary_brand: str, secondary_brand: str, top_n: int = 10):
+        df = self.df
+        primary_sub = df[df['brand_name_as_per_company_data'].str.upper() == primary_brand.upper()]
+        if primary_sub.empty:
+            return {'found': False, 'message': f'Brand "{primary_brand}" not found.'}
+
+        top_shops = (primary_sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
+                     .sum().sort_values(ascending=False).head(top_n))
+        top_shop_codes = top_shops.reset_index()['shop_code'].tolist()
+
+        secondary_sub = df[(df['brand_name_as_per_company_data'].str.upper() == secondary_brand.upper()) &
+                            (df['shop_code'].isin(top_shop_codes))]
+        secondary_by_shop = secondary_sub.groupby('shop_code')['sale_qty_in_box'].sum()
+
+        table = top_shops.reset_index()
+        table.columns = ['shop_code', 'Shop Name', f'{primary_brand} Qty']
+        table[f'{secondary_brand} Qty'] = table['shop_code'].map(secondary_by_shop).fillna(0).astype(int)
+        table.insert(0, 'Rank', range(1, len(table) + 1))
+
+        zero_gap_shops = table[table[f'{secondary_brand} Qty'] == 0]
+
+        return {
+            'found': True,
+            'primary_brand': primary_brand,
+            'secondary_brand': secondary_brand,
+            'table': table.to_dict('records'),
+            'gap_shops_count': len(zero_gap_shops),
+            'gap_shops': zero_gap_shops['Shop Name'].tolist()
+        }
+
+    # ------------------------------------------------------------------
+    # h) Month-over-Month Gainers & Losers (Segment-wise, Brand-wise)
+    #    NOTE: needs a second month's dataframe (e.g. April data) to run.
+    #    Static method so it can be called as:
+    #        SmartQueryEngine.mom_gainers_losers(df_current, df_previous, ...)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def mom_gainers_losers(df_current: pd.DataFrame, df_previous: pd.DataFrame,
+                            group_col: str = 'bd_segment', min_base: int = 500, top_n: int = 10):
+        """
+        Compares brand-wise sale within each value of group_col (BD Segment or
+        Segment) between current month and previous month, and returns
+        top gainers and top losers by % change.
+
+        group_col: 'bd_segment' (default) or 'segment'
+        min_base: minimum previous-month qty required for a brand to be
+                  considered in gainers/losers ranking. This avoids misleading
+                  swings from tiny-volume brands (e.g. 1 box -> 5 box = 400%).
+                  New entries and dropped brands are still returned separately,
+                  regardless of min_base.
+        """
+        cur = (df_current.groupby([group_col, 'brand_name_as_per_company_data'])['sale_qty_in_box']
+               .sum().reset_index().rename(columns={'sale_qty_in_box': 'current_qty'}))
+        prev = (df_previous.groupby([group_col, 'brand_name_as_per_company_data'])['sale_qty_in_box']
+                .sum().reset_index().rename(columns={'sale_qty_in_box': 'previous_qty'}))
+
+        merged = pd.merge(cur, prev, on=[group_col, 'brand_name_as_per_company_data'], how='outer').fillna(0)
+        merged['current_qty'] = merged['current_qty'].astype(int)
+        merged['previous_qty'] = merged['previous_qty'].astype(int)
+        merged['change_qty'] = merged['current_qty'] - merged['previous_qty']
+
+        def pct_change(row):
+            if row['previous_qty'] == 0:
+                return None  # new entry, % change undefined
+            return round((row['change_qty'] / row['previous_qty']) * 100, 2)
+
+        merged['pct_change'] = merged.apply(pct_change, axis=1)
+
+        # Only brands with a meaningful previous-month base are ranked as
+        # gainers/losers, to avoid noise from tiny-volume swings.
+        meaningful = merged[(merged['pct_change'].notna()) & (merged['previous_qty'] >= min_base)]
+
+        gainers = meaningful.sort_values('pct_change', ascending=False).head(top_n)
+        losers = meaningful.sort_values('pct_change', ascending=True).head(top_n)
+        new_entries = merged[merged['previous_qty'] == 0].sort_values('current_qty', ascending=False).head(top_n)
+        dropped = merged[merged['current_qty'] == 0].sort_values('previous_qty', ascending=False).head(top_n)
+
+        return {
+            'group_col': group_col,
+            'min_base_used': min_base,
+            'top_gainers': gainers.to_dict('records'),
+            'top_losers': losers.to_dict('records'),
+            'new_entries': new_entries.to_dict('records'),
+            'dropped_brands': dropped.to_dict('records')
+        }
+
+    # ------------------------------------------------------------------
+    # i) Brand Ranking — rank at BD Segment, Segment, and Overall Market level
+    # ------------------------------------------------------------------
+    def brand_ranking(self, brand_name: str):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        # IMPORTANT: use the actual database spelling/casing from here on, not
+        # the user's raw input -- .index.get_loc() needs an exact match, and
+        # a user typing "dennis" instead of "DENNIS SPECIAL GOLD WHISKY"
+        # would otherwise raise KeyError.
+        canonical_name = sub['brand_name_as_per_company_data'].iloc[0]
+
+        bd_segment = sub['bd_segment'].unique()
+        segment = sub['segment'].unique()
+        brand_qty = sub['sale_qty_in_box'].sum()
+
+        bd_sub = df[df['bd_segment'].isin(bd_segment)]
+        bd_rank_series = bd_sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        bd_rank = int(bd_rank_series.index.get_loc(canonical_name) + 1)
+        bd_total_brands = len(bd_rank_series)
+
+        seg_sub = df[df['segment'].isin(segment)]
+        seg_rank_series = seg_sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        seg_rank = int(seg_rank_series.index.get_loc(canonical_name) + 1)
+        seg_total_brands = len(seg_rank_series)
+
+        overall_rank_series = df.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        overall_rank = int(overall_rank_series.index.get_loc(canonical_name) + 1)
+        overall_total_brands = len(overall_rank_series)
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'sale_qty': int(brand_qty),
+            'bd_segment': list(bd_segment),
+            'rank_within_bd_segment': bd_rank,
+            'total_brands_in_bd_segment': bd_total_brands,
+            'percentile_in_bd_segment': float(round((1 - (bd_rank - 1) / bd_total_brands) * 100, 1)),
+            'segment': list(segment),
+            'rank_within_segment': seg_rank,
+            'total_brands_in_segment': seg_total_brands,
+            'percentile_in_segment': float(round((1 - (seg_rank - 1) / seg_total_brands) * 100, 1)),
+            'overall_market_rank': overall_rank,
+            'total_brands_overall': overall_total_brands,
+            'percentile_overall': float(round((1 - (overall_rank - 1) / overall_total_brands) * 100, 1))
+        }
+
+
+# ----------------------------------------------------------------------
+# Example usage / quick test
+# ----------------------------------------------------------------------
+if __name__ == '__main__':
+    df = pd.read_csv('/mnt/user-data/uploads/DI_MAY_26.csv', low_memory=False)
+    engine = SmartQueryEngine(df)
+
+    print(engine.brand_report('DENNIS SPECIAL GOLD WHISKY'))
+    print()
+    print(engine.smart_query('Semi Pre Whisky', '8 PM PREMIUM BLACK BLENDED WHISKY'))
+    print()
+    print(engine.market_share('company_name', top_n=5))
+    print()
+    print(engine.brand_share_filter('Semi Pre Whisky', threshold=5.0, mode='above'))
+    print()
+    print(engine.compare_brands(['OLD HABBIT PREMIUM WHISKY', 'ROYAL ACE RARE BLENDED WHISKY',
+                                   'ALL SEASONS COLLECTORS COLLECTION RESERVE WHISKY']))
+    print()
+    print(engine.cross_reference_shops('OLD HABBIT PREMIUM WHISKY', 'ROYAL ACE RARE BLENDED WHISKY', top_n=5))
+
+    # MoM example (using real April vs May data):
+    df_april = pd.read_csv('/mnt/user-data/uploads/DI_APR_26.csv', low_memory=False)
+    mom_result = SmartQueryEngine.mom_gainers_losers(df, df_april, group_col='bd_segment',
+                                                       min_base=500, top_n=10)
+    print()
+    print('Top Gainer:', mom_result['top_gainers'][0])
+    print('Top Loser:', mom_result['top_losers'][0])
