@@ -36,7 +36,6 @@ class SmartQueryEngine:
             }
 
         bd_segment = sub['bd_segment'].unique()
-        segment = sub['segment'].unique()
         brand_qty = sub['sale_qty_in_box'].sum()
         bd_total = df[df['bd_segment'].isin(bd_segment)]['sale_qty_in_box'].sum()
         shop_count = sub['shop_code'].nunique()
@@ -50,7 +49,6 @@ class SmartQueryEngine:
             'company_name': list(sub['company_name'].unique()),
             'bd_segment': list(bd_segment),
             'bd_segment_total_sale': int(bd_total),
-            'segment': list(segment),
             'brand_sale_qty': int(brand_qty),
             'brand_pct_within_bd_segment': float(round(brand_qty / bd_total * 100, 2)),
             'brand_pct_of_market': float(round(brand_qty / self.total_market * 100, 2)),
@@ -93,7 +91,7 @@ class SmartQueryEngine:
     # c) Market share by any dimension
     # ------------------------------------------------------------------
     def market_share(self, dimension: str, top_n: int = 10):
-        valid_dims = ['company_name', 'liquor_type', 'segment', 'bd_segment',
+        valid_dims = ['company_name', 'liquor_type', 'bd_segment',
                       'department', 'salesman_tse']
         if dimension not in valid_dims:
             return {'found': False, 'message': f'Invalid dimension. Choose from {valid_dims}'}
@@ -116,11 +114,11 @@ class SmartQueryEngine:
     def shop_comparison(self, brand_name: str, top_n: int = 10):
         df = self.df
         seg_val = df[df['brand_name_as_per_company_data'].str.upper() ==
-                     brand_name.upper()]['segment'].unique()
+                     brand_name.upper()]['bd_segment'].unique()
         if len(seg_val) == 0:
             return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
 
-        same_seg = df[df['segment'].isin(seg_val)]
+        same_seg = df[df['bd_segment'].isin(seg_val)]
         other_brands = same_seg[same_seg['brand_name_as_per_company_data'].str.upper()
                                  != brand_name.upper()]
         top_competitors = (other_brands.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
@@ -138,6 +136,7 @@ class SmartQueryEngine:
         return {
             'found': True,
             'brand': brand_name,
+            'bd_segment': list(seg_val),
             'top_competitors': top_competitors,
             'total_shops': len(pivot),
             'table': pivot.head(20).to_dict('records')  # top 20 shops for display
@@ -307,11 +306,11 @@ class SmartQueryEngine:
     def mom_gainers_losers(df_current: pd.DataFrame, df_previous: pd.DataFrame,
                             group_col: str = 'bd_segment', min_base: int = 500, top_n: int = 10):
         """
-        Compares brand-wise sale within each value of group_col (BD Segment or
-        Segment) between current month and previous month, and returns
+        Compares brand-wise sale within each value of group_col (bd_segment)
+        between current month and previous month, and returns
         top gainers and top losers by % change.
 
-        group_col: 'bd_segment' (default) or 'segment'
+        group_col: 'bd_segment' (only supported grouping)
         min_base: minimum previous-month qty required for a brand to be
                   considered in gainers/losers ranking. This avoids misleading
                   swings from tiny-volume brands (e.g. 1 box -> 5 box = 400%).
@@ -369,18 +368,12 @@ class SmartQueryEngine:
         canonical_name = sub['brand_name_as_per_company_data'].iloc[0]
 
         bd_segment = sub['bd_segment'].unique()
-        segment = sub['segment'].unique()
         brand_qty = sub['sale_qty_in_box'].sum()
 
         bd_sub = df[df['bd_segment'].isin(bd_segment)]
         bd_rank_series = bd_sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
         bd_rank = int(bd_rank_series.index.get_loc(canonical_name) + 1)
         bd_total_brands = len(bd_rank_series)
-
-        seg_sub = df[df['segment'].isin(segment)]
-        seg_rank_series = seg_sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
-        seg_rank = int(seg_rank_series.index.get_loc(canonical_name) + 1)
-        seg_total_brands = len(seg_rank_series)
 
         overall_rank_series = df.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
         overall_rank = int(overall_rank_series.index.get_loc(canonical_name) + 1)
@@ -394,10 +387,6 @@ class SmartQueryEngine:
             'rank_within_bd_segment': bd_rank,
             'total_brands_in_bd_segment': bd_total_brands,
             'percentile_in_bd_segment': float(round((1 - (bd_rank - 1) / bd_total_brands) * 100, 1)),
-            'segment': list(segment),
-            'rank_within_segment': seg_rank,
-            'total_brands_in_segment': seg_total_brands,
-            'percentile_in_segment': float(round((1 - (seg_rank - 1) / seg_total_brands) * 100, 1)),
             'overall_market_rank': overall_rank,
             'total_brands_overall': overall_total_brands,
             'percentile_overall': float(round((1 - (overall_rank - 1) / overall_total_brands) * 100, 1))

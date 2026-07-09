@@ -76,7 +76,6 @@ COL_LIQUOR_TYPE = 'liquor_type'
 COL_SHOP_CODE = 'shop_code'
 COL_CATEGORY = 'category'
 COL_COMPANY = 'company_name'
-COL_SEGMENT = 'segment'
 COL_BD_SEGMENT = 'bd_segment'
 COL_PACK_SIZE = 'product_itemsize_name'
 
@@ -135,7 +134,6 @@ DIMENSIONS = {
     'shop_code': COL_SHOP_CODE,
     'category': COL_CATEGORY,
     'company': COL_COMPANY,
-    'segment': COL_SEGMENT,
     'bd_segment': COL_BD_SEGMENT,
     'pack_size': COL_PACK_SIZE,
 }
@@ -168,9 +166,9 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
    params: {{"bd_segment": "...", "brand_name": "..."}}
    Trigger: "Semi Pre Whisky mein Dennis ka kya haal hai"
 
-4. "market_share_dimension" -- kisi bhi dimension (company/liquor_type/segment/bd_segment/
+4. "market_share_dimension" -- kisi bhi dimension (company/liquor_type/bd_segment/
    department/tse) ka pura market-share ranking.
-   params: {{"dimension": "company_name" | "liquor_type" | "segment" | "bd_segment" | "department" | "salesman_tse", "top_n": 10}}
+   params: {{"dimension": "company_name" | "liquor_type" | "bd_segment" | "department" | "salesman_tse", "top_n": 10}}
    Trigger: "Company wise market share dikhao", "Department wise market share"
 
 5. "shop_comparison" -- ek brand vs uske top competitors (same segment), shop-by-shop table.
@@ -191,7 +189,7 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
 
 9. "mom_gainers_losers" -- Month-over-month gainers/losers, automatically latest vs pichla mahina
    use karta hai (koi month specify karne ki zaroorat nahi).
-   params: {{"group_col": "bd_segment" or "segment", "min_base": 500, "top_n": 10}}
+   params: {{"group_col": "bd_segment", "min_base": 500, "top_n": 10}}
    Trigger: "is mahine ke gainers losers dikhao", "kaunse brands grow kiye"
 
 10. "brand_ranking" -- ek brand ka rank BD Segment, Segment, aur overall market mein.
@@ -216,6 +214,12 @@ ise liquor_type mein mat daalo aur "Whisky" alag se filter mat karo.
 "liquor_type" dimension broader hai (sirf: Whisky, Vodka, Alcopop, Wine, Gin, Rum, Liqueur, Brandy,
 Mixed Alcoholic Beverages) -- jab user generic "Whisky" ya "Rum" bole (bina Premium/Regular/Semi
 qualifier ke), tab liquor_type use karo.
+
+IMPORTANT: is dataset mein ek plain "segment" naam ka field NAHI hai (hata diya gaya hai, kyunki
+uski values confusing/tautological thi jaise "Whisky Segment Royal Ace"). Jab bhi user "segment"
+word use kare kisi bhi tarah ("Royal Ace ka segment kya hai", "segment wise breakdown"), uska
+matlab HAMESHA "bd_segment" hi hai (Semi Pre Whisky, Regular Whisky, Premium Whisky, etc.) --
+isi ko use karo, kabhi "segment" naam ka alag dimension mat banao.
 
 "pack_size" dimension ke real values yeh hain: "Nip, Quarter", "Bottle", "Half", "Pint",
 "Miniature 90 ml", "Miniature 60 ml", "500 ML", "Imported 275 ml", "Imported Bottle 1000 ml",
@@ -255,11 +259,16 @@ def parse_query_with_claude(question: str) -> dict:
 def run_query(spec: dict) -> str:
     filtered = df
 
-    # Apply filters (partial, case-insensitive match -- so "dccws" or "DCCWS" both work)
+    # Apply filters -- each value is first fuzzy-resolved to the closest
+    # REAL value in that column (exact -> substring -> typo-tolerant match),
+    # then applied as a filter. This means every dimension (department,
+    # company, liquor_type, etc.) tolerates partial names and small spelling
+    # differences, not just brand/bd_segment.
     for dim, value in (spec.get("filters") or {}).items():
         col = DIMENSIONS.get(dim)
         if col and col in filtered.columns:
-            filtered = filtered[filtered[col].astype(str).str.contains(str(value), case=False, na=False)]
+            resolved_value = fuzzy_resolve_value(str(value), col)
+            filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
     if filtered.empty:
         return "Is filter ke liye koi data nahi mila."
@@ -284,7 +293,8 @@ def run_query(spec: dict) -> str:
         for dim, value in share_filter.items():
             col = DIMENSIONS.get(dim)
             if col and col in subset.columns:
-                subset = subset[subset[col].astype(str).str.contains(str(value), case=False, na=False)]
+                resolved_value = fuzzy_resolve_value(str(value), col)
+                subset = subset[subset[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
         group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
         top_n = spec.get("top_n") or 10
@@ -324,44 +334,78 @@ def run_query(spec: dict) -> str:
     return result.to_string()
 
 
-def resolve_brand_name(partial_name: str) -> str:
-    """User often types a short/partial brand name ('Royal Ace') while the
-    real database value is longer ('ROYAL ACE RARE BLENDED WHISKY'). Exact
-    matching would fail and incorrectly report 'not found'. This resolves
-    the partial name to the closest real brand name in the data, so the
-    downstream SmartQueryEngine call gets the correct full name.
-    Falls back to returning the original input if nothing matches at all
-    (the engine's own 'not found' handling takes over from there)."""
-    if df.empty or not partial_name:
-        return partial_name
+import difflib
 
-    brand_col = df[COL_BRAND].astype(str)
 
-    # 1. Exact match (case-insensitive) -- already correct, nothing to do
-    exact = brand_col.str.upper() == partial_name.upper()
-    if exact.any():
-        return df.loc[exact, COL_BRAND].iloc[0]
+def fuzzy_resolve_value(user_value: str, column) -> str:
+    """Resolves whatever the user typed to the closest REAL value that
+    actually exists in that column -- users rarely type the exact database
+    string. Tries 3 levels, in order:
 
-    # 2. Partial/contains match -- pick the one with the highest total sales
-    #    among matches (most likely the brand the person actually means)
-    contains = brand_col.str.contains(partial_name, case=False, na=False, regex=False)
-    if contains.any():
-        matches = df.loc[contains]
-        best = matches.groupby(COL_BRAND)[COL_QTY].sum().sort_values(ascending=False)
+    1. Exact match (case-insensitive) -- user typed it correctly already.
+    2. Substring match -- user typed a short/partial version ("Royal Ace"
+       -> "ROYAL ACE RARE BLENDED WHISKY"). If multiple values contain the
+       text, picks the one with the highest total sale_qty_in_box (most
+       likely the one meant).
+    3. Fuzzy similarity match (difflib) -- catches typos and word-order/
+       spelling variations that aren't a clean substring, e.g. "Semi
+       Premium Whisky" -> "Semi Pre Whisky". This compares overall string
+       similarity rather than requiring an exact substring.
+
+    Falls back to returning the original input untouched if nothing is
+    close enough at any level -- the calling function's own "not found"
+    handling takes over from there, rather than silently guessing wrong.
+    """
+    if df.empty or not user_value or column not in df.columns:
+        return user_value
+
+    col_series = df[column].astype(str)
+    unique_values = col_series.unique()
+    if len(unique_values) == 0:
+        return user_value
+
+    upper_to_actual = {}
+    for v in unique_values:
+        upper_to_actual.setdefault(v.upper(), v)
+
+    # 1. Exact (case-insensitive)
+    if user_value.upper() in upper_to_actual:
+        return upper_to_actual[user_value.upper()]
+
+    # 2. Substring -- prefer the highest-volume match if several contain it
+    contains_mask = col_series.str.contains(user_value, case=False, na=False, regex=False)
+    if contains_mask.any():
+        matches = df.loc[contains_mask]
+        best = matches.groupby(column)[COL_QTY].sum().sort_values(ascending=False)
         return best.index[0]
 
-    # 3. No match at all -- return as-is, let the engine report "not found"
-    return partial_name
+    # 3. Fuzzy similarity (handles typos / reordered words / partial spelling)
+    close = difflib.get_close_matches(user_value.upper(), list(upper_to_actual.keys()), n=1, cutoff=0.6)
+    if close:
+        return upper_to_actual[close[0]]
+
+    # Nothing close enough -- let the caller's own not-found handling report it
+    return user_value
+
+
+def resolve_brand_name(partial_name: str) -> str:
+    return fuzzy_resolve_value(partial_name, COL_BRAND)
+
+
+def resolve_bd_segment_name(partial_name: str) -> str:
+    return fuzzy_resolve_value(partial_name, COL_BD_SEGMENT)
 
 
 def run_special_intent(intent: str, params: dict) -> str:
-    """Routes a parsed intent to the matching SmartQueryEngine function.
+    """Routes a parsed intent to the matching SmartQueryEngine method.
     Returns a JSON string of the result (or an error message string)."""
     engine = SmartQueryEngine(df)  # cheap wrapper around current df, rebuilt fresh each call
 
-    # Auto-resolve partial brand names to their full canonical database names
-    # (e.g. "Royal Ace" -> "ROYAL ACE RARE BLENDED WHISKY") so exact-match
-    # lookups in SmartQueryEngine don't incorrectly report "not found".
+    # Auto-resolve partial/loosely-worded names to their exact canonical
+    # database values -- every intent below requires EXACT (case-insensitive)
+    # matches internally, so any mismatch here would silently produce
+    # "not found" even when the data clearly exists. This is the single
+    # place all name resolution happens, so every intent benefits at once.
     if "brand_name" in params:
         params["brand_name"] = resolve_brand_name(params["brand_name"])
     if "primary_brand" in params:
@@ -370,6 +414,8 @@ def run_special_intent(intent: str, params: dict) -> str:
         params["secondary_brand"] = resolve_brand_name(params["secondary_brand"])
     if "brands" in params and isinstance(params["brands"], list):
         params["brands"] = [resolve_brand_name(b) for b in params["brands"]]
+    if "bd_segment" in params:
+        params["bd_segment"] = resolve_bd_segment_name(params["bd_segment"])
 
     try:
         if intent == "brand_report":
@@ -464,11 +510,18 @@ def chat(request: ChatRequest):
             "result) -- dono cases mein data ko markdown table format mein present kar jab multiple "
             "columns/fields hon. | col1 | col2 | format use karo. Emojis use karo. Hinglish mein baat karo. "
             "JSON mein agar 'found': false ho, to clearly bolo ki data nahi mila, aur agar 'similar_brands' "
-            "jaisa suggestion mile to woh dikhao. Numbers ko JSON se as-is lo, khud se mat calculate karo. "
-            "COMPARISON queries (compare_brands, shop_comparison, cross_reference_shops) ke liye: HAMESHA "
-            "EK HI TABLE banao jisme har brand/item ek ROW ho aur metrics COLUMNS hon -- alag-alag blocks "
-            "ya paragraphs mein mat todo, chahe koi brand na mila ho (uski row mein 'Not Found' likh do, "
-            "baaki rows normal dikhao usi table mein)."
+            "jaisa suggestion mile to woh dikhao. Numbers ko JSON se as-is lo -- kabhi khud se koi number, "
+            "percentage, ya total calculate/invent mat karo, sirf jo diya gaya hai wahi dikhao. "
+            "GENERAL RULE: jab bhi data mein multiple items ki list/array ho (brands, shops, gainers, "
+            "losers, rankings, etc.), unhe HAMESHA EK HI markdown table mein dikhao -- har item ek ROW, "
+            "fields COLUMNS. Kabhi bhi ek-ek item ke liye alag paragraph/block mat banao. Agar kisi ek "
+            "item ka data na mile (found:false), uski row mein 'Not Found' likh do, baaki items normal "
+            "dikhao usi table mein -- format kabhi mat todo. "
+            "CRITICAL: agar JSON mein koi field ek chhoti list/array hai jisme actual descriptive value "
+            "hai (jaise 'bd_segment': ['Regular Whisky'], 'company_name': ['XYZ Ltd']), toh "
+            "us list ke andar ki ASLI VALUE seedha bata do (jaise 'Segment: Whisky Segment Dennis') -- "
+            "kabhi 'unclear', '1 unique segment', ya 'specific name visible nahi hai' jaisa mat bolo. "
+            "Value JSON mein saaf maujood hai, use hamesha directly quote karo."
         ),
         messages=[{"role": "user", "content": f"Sawaal: {request.message}\nData: {data}"}]
     )
