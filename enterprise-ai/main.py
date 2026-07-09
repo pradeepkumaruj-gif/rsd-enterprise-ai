@@ -324,10 +324,52 @@ def run_query(spec: dict) -> str:
     return result.to_string()
 
 
+def resolve_brand_name(partial_name: str) -> str:
+    """User often types a short/partial brand name ('Royal Ace') while the
+    real database value is longer ('ROYAL ACE RARE BLENDED WHISKY'). Exact
+    matching would fail and incorrectly report 'not found'. This resolves
+    the partial name to the closest real brand name in the data, so the
+    downstream SmartQueryEngine call gets the correct full name.
+    Falls back to returning the original input if nothing matches at all
+    (the engine's own 'not found' handling takes over from there)."""
+    if df.empty or not partial_name:
+        return partial_name
+
+    brand_col = df[COL_BRAND].astype(str)
+
+    # 1. Exact match (case-insensitive) -- already correct, nothing to do
+    exact = brand_col.str.upper() == partial_name.upper()
+    if exact.any():
+        return df.loc[exact, COL_BRAND].iloc[0]
+
+    # 2. Partial/contains match -- pick the one with the highest total sales
+    #    among matches (most likely the brand the person actually means)
+    contains = brand_col.str.contains(partial_name, case=False, na=False, regex=False)
+    if contains.any():
+        matches = df.loc[contains]
+        best = matches.groupby(COL_BRAND)[COL_QTY].sum().sort_values(ascending=False)
+        return best.index[0]
+
+    # 3. No match at all -- return as-is, let the engine report "not found"
+    return partial_name
+
+
 def run_special_intent(intent: str, params: dict) -> str:
     """Routes a parsed intent to the matching SmartQueryEngine function.
     Returns a JSON string of the result (or an error message string)."""
     engine = SmartQueryEngine(df)  # cheap wrapper around current df, rebuilt fresh each call
+
+    # Auto-resolve partial brand names to their full canonical database names
+    # (e.g. "Royal Ace" -> "ROYAL ACE RARE BLENDED WHISKY") so exact-match
+    # lookups in SmartQueryEngine don't incorrectly report "not found".
+    if "brand_name" in params:
+        params["brand_name"] = resolve_brand_name(params["brand_name"])
+    if "primary_brand" in params:
+        params["primary_brand"] = resolve_brand_name(params["primary_brand"])
+    if "secondary_brand" in params:
+        params["secondary_brand"] = resolve_brand_name(params["secondary_brand"])
+    if "brands" in params and isinstance(params["brands"], list):
+        params["brands"] = [resolve_brand_name(b) for b in params["brands"]]
 
     try:
         if intent == "brand_report":
@@ -422,7 +464,11 @@ def chat(request: ChatRequest):
             "result) -- dono cases mein data ko markdown table format mein present kar jab multiple "
             "columns/fields hon. | col1 | col2 | format use karo. Emojis use karo. Hinglish mein baat karo. "
             "JSON mein agar 'found': false ho, to clearly bolo ki data nahi mila, aur agar 'similar_brands' "
-            "jaisa suggestion mile to woh dikhao. Numbers ko JSON se as-is lo, khud se mat calculate karo."
+            "jaisa suggestion mile to woh dikhao. Numbers ko JSON se as-is lo, khud se mat calculate karo. "
+            "COMPARISON queries (compare_brands, shop_comparison, cross_reference_shops) ke liye: HAMESHA "
+            "EK HI TABLE banao jisme har brand/item ek ROW ho aur metrics COLUMNS hon -- alag-alag blocks "
+            "ya paragraphs mein mat todo, chahe koi brand na mila ho (uski row mein 'Not Found' likh do, "
+            "baaki rows normal dikhao usi table mein)."
         ),
         messages=[{"role": "user", "content": f"Sawaal: {request.message}\nData: {data}"}]
     )
