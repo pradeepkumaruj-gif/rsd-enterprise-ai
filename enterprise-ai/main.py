@@ -187,12 +187,24 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
    params: {{"primary_brand": "...", "secondary_brand": "...", "top_n": 10}}
    Trigger: "Dennis ke top shops mein 8PM ka kya sale hai"
 
-9. "mom_gainers_losers" -- Month-over-month gainers/losers, automatically latest vs pichla mahina
-   use karta hai (koi month specify karne ki zaroorat nahi).
-   params: {{"group_col": "bd_segment", "min_base": 500, "top_n": 10}}
-   Trigger: "is mahine ke gainers losers dikhao", "kaunse brands grow kiye"
+9. "mom_gainers_losers" -- Month-over-month gainers/losers/new-entries/dropped-brands, automatically
+   latest vs pichla mahina use karta hai (koi month specify karne ki zaroorat nahi).
+   params: {{"group_col": "bd_segment", "min_base": 500, "top_n": 10, "bd_segment_filter": null}}
+   - "bd_segment_filter" optional hai -- agar user ek SPECIFIC category naam bole (jaise "Semi Pre
+     Whisky segment mein" ya "Regular Whisky mein"), yahan uska naam daalo taaki result sirf usi
+     category tak scoped rahe.
+   - IMPORTANT: "loser/gainer/new entry/dropped" jaise words ke saath agar ek category/segment ka
+     naam bhi ho (jaise "Regular Whisky segment looser", "Regular Whisky mein kaun gir raha hai"),
+     yeh HAMESHA is intent (mom_gainers_losers) ka case hai -- YEH BRAND-SPECIFIC QUERY NAHI HAI,
+     "brand_mom_check" mat use karo, aur user se brand naam MAT poocho -- seedha bd_segment_filter
+     mein category daal ke poori losers/gainers LIST return karo.
+   Trigger: "is mahine ke gainers losers dikhao", "kaunse brands grow kiye", "Semi Pre Whisky segment
+   mein new brand entry" (-> bd_segment_filter: "Semi Pre Whisky"), "naye brands kaunse aaye is
+   category mein", "kaunse brands band ho gaye", "Regular Whisky segment looser" (-> intent:
+   mom_gainers_losers, bd_segment_filter: "Regular Whisky", NOT brand_mom_check), "Regular Whisky
+   mein kaun kaun gir raha hai"
 
-10. "brand_ranking" -- ek brand ka rank BD Segment, Segment, aur overall market mein.
+10. "brand_ranking" -- ek brand ka rank BD Segment aur overall market mein.
     params: {{"brand_name": "..."}}
     Trigger: "Dennis ka rank kya hai"
 
@@ -200,7 +212,22 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     params: {{"brand_name": "..."}}
     Trigger: "Dennis pichle mahine se kaisa perform kiya", "Dennis ka growth"
 
-Agar sawaal upar ke kisi specific intent (2-11) se match nahi karta, "generic" use karo.
+12. "brands_in_bd_segment" -- ek brand ke bd_segment (category) ke andar BAAKI SAB brands ki
+    ranked list (kaun kaun se aur brands isi category mein bikte hain, kitna sale hai).
+    params: {{"brand_name": "...", "top_n": 15}}
+    Trigger: "Royal Ace ke segment mein aur kaunse brands hain", "Dennis ki category mein
+    competitors kaun hain", "iske segment mein baaki brands"
+
+13. "company_report" -- ek COMPANY (manufacturer) ki poori sale -- uske SAARE brands milaake,
+    na ki sirf ek brand ka number. Agar user brand ka naam de ("Dennis brand ki company ka
+    total sale"), "brand_name" param mein daalo -- system automatically us brand ki company
+    dhoondh ke uska poora company-wide total nikalega. Agar user seedha company ka naam de,
+    "company_name" param use karo.
+    params: {{"company_name": null, "brand_name": null, "top_brands": 10}}
+    Trigger: "Dennis brand ki company ki total sale kya hai", "OMSONS company ka total business
+    kitna hai", "[brand] banane wali company ka overall sale"
+
+Agar sawaal upar ke kisi specific intent (2-13) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -396,6 +423,10 @@ def resolve_bd_segment_name(partial_name: str) -> str:
     return fuzzy_resolve_value(partial_name, COL_BD_SEGMENT)
 
 
+def resolve_company_name(partial_name: str) -> str:
+    return fuzzy_resolve_value(partial_name, COL_COMPANY)
+
+
 def run_special_intent(intent: str, params: dict) -> str:
     """Routes a parsed intent to the matching SmartQueryEngine method.
     Returns a JSON string of the result (or an error message string)."""
@@ -449,6 +480,13 @@ def run_special_intent(intent: str, params: dict) -> str:
             df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
             if df_current is None:
                 return "MoM comparison ke liye kam se kam 2 mahino ka data chahiye. Abhi sirf 1 mahina loaded hai."
+
+            bd_seg_filter = params.get("bd_segment_filter")
+            if bd_seg_filter:
+                bd_seg_filter = resolve_bd_segment_name(bd_seg_filter)
+                df_current = df_current[df_current[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
+                df_previous = df_previous[df_previous[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
+
             result = SmartQueryEngine.mom_gainers_losers(
                 df_current, df_previous,
                 group_col=params.get("group_col", "bd_segment"),
@@ -457,9 +495,29 @@ def run_special_intent(intent: str, params: dict) -> str:
             )
             result["current_month"] = cur_label
             result["previous_month"] = prev_label
+            if bd_seg_filter:
+                result["bd_segment_filter_applied"] = bd_seg_filter
 
         elif intent == "brand_ranking":
             result = engine.brand_ranking(params["brand_name"])
+
+        elif intent == "brands_in_bd_segment":
+            result = engine.brands_in_bd_segment(params["brand_name"], top_n=params.get("top_n", 15))
+
+        elif intent == "company_report":
+            company_name = params.get("company_name")
+            if not company_name and params.get("brand_name"):
+                # User gave a brand -- find which company makes it, then
+                # report on the WHOLE company (all its brands combined),
+                # not just the one brand that was named.
+                resolved_brand = resolve_brand_name(params["brand_name"])
+                match = df[df[COL_BRAND].str.upper() == resolved_brand.upper()]
+                if not match.empty:
+                    company_name = match[COL_COMPANY].iloc[0]
+            if not company_name:
+                return "Company ya brand ka naam nahi mila is query ke liye."
+            company_name = resolve_company_name(company_name)
+            result = engine.company_report(company_name, top_brands=params.get("top_brands", 10))
 
         elif intent == "brand_mom_check":
             df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()

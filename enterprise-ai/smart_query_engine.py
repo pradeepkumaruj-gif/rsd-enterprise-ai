@@ -392,6 +392,78 @@ class SmartQueryEngine:
             'percentile_overall': float(round((1 - (overall_rank - 1) / overall_total_brands) * 100, 1))
         }
 
+    # ------------------------------------------------------------------
+    # k) List ALL brands within the same bd_segment as a given brand
+    #    (e.g. "Royal Ace ke segment mein baaki brands kaunse hain")
+    # ------------------------------------------------------------------
+    def brands_in_bd_segment(self, brand_name: str, top_n: int = 15):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        bd_seg = sub['bd_segment'].unique()
+        same_seg = df[df['bd_segment'].isin(bd_seg)]
+
+        ranking = (same_seg.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                   .sum().sort_values(ascending=False))
+        seg_total = ranking.sum()
+
+        rows = []
+        for rank, (brand, qty) in enumerate(ranking.head(top_n).items(), start=1):
+            rows.append({
+                'rank': rank,
+                'brand': brand,
+                'sale_qty': int(qty),
+                'pct_within_bd_segment': float(round(qty / seg_total * 100, 2)),
+                'is_queried_brand': brand.upper() == brand_name.upper(),
+            })
+
+        return {
+            'found': True,
+            'brand_queried': brand_name,
+            'bd_segment': list(bd_seg),
+            'total_brands_in_bd_segment': len(ranking),
+            'bd_segment_total_sale': int(seg_total),
+            'brands': rows,
+        }
+
+    # ------------------------------------------------------------------
+    # l) Company-wide report: total sale across ALL brands under a company
+    #    (e.g. "Dennis brand ki company ki total sale kya hai" needs to
+    #    resolve Dennis -> its manufacturer -> sum across ALL that
+    #    manufacturer's brands, not just the one brand asked about)
+    # ------------------------------------------------------------------
+    def company_report(self, company_name: str, top_brands: int = 10):
+        df = self.df
+        sub = df[df['company_name'].str.upper() == company_name.upper()]
+        if sub.empty:
+            similar = df[df['company_name'].str.contains(
+                company_name.split()[0], case=False, na=False)]['company_name'].unique()
+            return {
+                'found': False,
+                'message': f'Company "{company_name}" not found.',
+                'similar_companies': list(similar[:10])
+            }
+
+        total_qty = int(sub['sale_qty_in_box'].sum())
+        pct_of_market = float(round(total_qty / self.total_market * 100, 2))
+        brand_breakdown = (sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                            .sum().sort_values(ascending=False))
+        bd_segments = list(sub['bd_segment'].unique())
+
+        return {
+            'found': True,
+            'company': company_name,
+            'total_sale_qty': total_qty,
+            'pct_of_market': pct_of_market,
+            'bd_segments_covered': bd_segments,
+            'total_brands_under_company': len(brand_breakdown),
+            'top_brands': [
+                {'brand': b, 'sale_qty': int(q)} for b, q in brand_breakdown.head(top_brands).items()
+            ],
+        }
+
 
 # ----------------------------------------------------------------------
 # Example usage / quick test
