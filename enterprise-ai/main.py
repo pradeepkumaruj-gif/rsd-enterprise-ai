@@ -26,12 +26,30 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def fetch_all_rows(table_name: str) -> pd.DataFrame:
-    """Supabase returns max 1000 rows per call, so page through until done."""
+    """Supabase returns max 1000 rows per call, so page through until done.
+
+    CRITICAL: .order("id") is required here. Without an explicit stable
+    sort, Postgres/PostgREST does NOT guarantee the same row ordering
+    across separate .range() calls -- meaning different pages could
+    overlap (same row fetched twice) or leave gaps (a row skipped
+    entirely), silently corrupting aggregate sums. This was confirmed as
+    the root cause of inconsistent/wrong totals appearing on different
+    reloads (e.g. Dennis's April qty showing as 27,837 one time and
+    26,681 another, when the verified correct value in Supabase is
+    31,536). Ordering by the primary key guarantees every row is fetched
+    exactly once, in the same order, every single time.
+    """
     all_rows = []
     page_size = 1000
     start = 0
     while True:
-        response = supabase.table(table_name).select("*").range(start, start + page_size - 1).execute()
+        response = (
+            supabase.table(table_name)
+            .select("*")
+            .order("id")
+            .range(start, start + page_size - 1)
+            .execute()
+        )
         batch = response.data
         if not batch:
             break
@@ -189,20 +207,25 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
 
 9. "mom_gainers_losers" -- Month-over-month gainers/losers/new-entries/dropped-brands, automatically
    latest vs pichla mahina use karta hai (koi month specify karne ki zaroorat nahi).
-   params: {{"group_col": "bd_segment", "min_base": 500, "top_n": 10, "bd_segment_filter": null}}
+   params: {{"group_col": "bd_segment", "min_base": 500, "top_n": 10, "bd_segment_filter": null,
+   "sections": ["losers"]}}
    - "bd_segment_filter" optional hai -- agar user ek SPECIFIC category naam bole (jaise "Semi Pre
      Whisky segment mein" ya "Regular Whisky mein"), yahan uska naam daalo taaki result sirf usi
      category tak scoped rahe.
+   - "sections" IMPORTANT hai -- user ne EXACTLY kya poocha, sirf wahi section(s) daalo is list mein.
+     Options: "gainers", "losers", "new_entries", "dropped". Agar sirf "losers" poocha hai, sirf
+     ["losers"] daalo -- gainers/new_entries/dropped MAT daalo. Agar sab kuch poocha ("gainers
+     losers dono dikhao"), sabhi relevant section daalo. User ne jo NAHI poocha, use include mat karo.
    - IMPORTANT: "loser/gainer/new entry/dropped" jaise words ke saath agar ek category/segment ka
      naam bhi ho (jaise "Regular Whisky segment looser", "Regular Whisky mein kaun gir raha hai"),
      yeh HAMESHA is intent (mom_gainers_losers) ka case hai -- YEH BRAND-SPECIFIC QUERY NAHI HAI,
      "brand_mom_check" mat use karo, aur user se brand naam MAT poocho -- seedha bd_segment_filter
      mein category daal ke poori losers/gainers LIST return karo.
-   Trigger: "is mahine ke gainers losers dikhao", "kaunse brands grow kiye", "Semi Pre Whisky segment
-   mein new brand entry" (-> bd_segment_filter: "Semi Pre Whisky"), "naye brands kaunse aaye is
-   category mein", "kaunse brands band ho gaye", "Regular Whisky segment looser" (-> intent:
-   mom_gainers_losers, bd_segment_filter: "Regular Whisky", NOT brand_mom_check), "Regular Whisky
-   mein kaun kaun gir raha hai"
+   Trigger: "is mahine ke gainers losers dikhao" (-> sections: ["gainers","losers"]), "kaunse brands
+   grow kiye" (-> sections: ["gainers"]), "Semi Pre Whisky segment mein new brand entry" (->
+   bd_segment_filter: "Semi Pre Whisky", sections: ["new_entries"]), "kaunse brands band ho gaye"
+   (-> sections: ["dropped"]), "Regular Whisky segment looser" (-> intent: mom_gainers_losers,
+   bd_segment_filter: "Regular Whisky", sections: ["losers"], NOT brand_mom_check)
 
 10. "brand_ranking" -- ek brand ka rank BD Segment aur overall market mein.
     params: {{"brand_name": "..."}}
@@ -539,16 +562,36 @@ def run_special_intent(intent: str, params: dict):
                 df_current = df_current[df_current[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
                 df_previous = df_previous[df_previous[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
 
-            result = SmartQueryEngine.mom_gainers_losers(
+            full_result = SmartQueryEngine.mom_gainers_losers(
                 df_current, df_previous,
                 group_col=params.get("group_col", "bd_segment"),
                 min_base=params.get("min_base", 500),
                 top_n=params.get("top_n", 10),
             )
-            result["current_month"] = cur_label
-            result["previous_month"] = prev_label
+
+            # Only include the sections the user actually asked for -- e.g.
+            # if they asked "top losers", don't also dump gainers/new_entries/
+            # dropped_brands into the reply (that was the "poocha kuch,
+            # output kuch" bug).
+            section_key_map = {
+                "gainers": "top_gainers",
+                "losers": "top_losers",
+                "new_entries": "new_entries",
+                "dropped": "dropped_brands",
+            }
+            requested_sections = params.get("sections") or list(section_key_map.keys())
+            result = {
+                "current_month": cur_label,
+                "previous_month": prev_label,
+                "group_col": full_result["group_col"],
+                "min_base_used": full_result["min_base_used"],
+            }
             if bd_seg_filter:
                 result["bd_segment_filter_applied"] = bd_seg_filter
+            for section in requested_sections:
+                json_key = section_key_map.get(section)
+                if json_key:
+                    result[json_key] = full_result[json_key]
 
         elif intent == "brand_ranking":
             result = engine.brand_ranking(params["brand_name"])
