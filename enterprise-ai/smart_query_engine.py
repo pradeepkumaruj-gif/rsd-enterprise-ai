@@ -464,6 +464,116 @@ class SmartQueryEngine:
             ],
         }
 
+    # ------------------------------------------------------------------
+    # m) Full company comparison profile -- metrics 1,2,3,4,5,6,7,8,10
+    #    (metric 9, month-over-month, is handled separately via
+    #    company_mom_check below since it needs two months' dataframes)
+    # ------------------------------------------------------------------
+    def company_full_profile(self, company_name: str):
+        df = self.df
+        sub = df[df['company_name'].str.upper() == company_name.upper()]
+        if sub.empty:
+            similar = df[df['company_name'].str.contains(
+                company_name.split()[0], case=False, na=False)]['company_name'].unique()
+            return {
+                'found': False,
+                'message': f'Company "{company_name}" not found.',
+                'similar_companies': list(similar[:10])
+            }
+
+        canonical_name = sub['company_name'].iloc[0]
+        total_qty = int(sub['sale_qty_in_box'].sum())
+
+        # 2. Overall Market Share %
+        market_share_pct = float(round(total_qty / self.total_market * 100, 2))
+
+        # 3. Overall Rank
+        overall_rank_series = df.groupby('company_name')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        overall_rank = int(overall_rank_series.index.get_loc(canonical_name) + 1)
+        total_companies = len(overall_rank_series)
+
+        # 4. Number of Brands
+        num_brands = int(sub['brand_name_as_per_company_data'].nunique())
+
+        # 5. Number of BD Segments Present
+        num_bd_segments = int(sub['bd_segment'].nunique())
+
+        # 6. Top Brand (Hero SKU) + % contribution
+        brand_breakdown = sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        top_brand = brand_breakdown.index[0]
+        top_brand_qty = int(brand_breakdown.iloc[0])
+        top_brand_pct_of_company = float(round(top_brand_qty / total_qty * 100, 2)) if total_qty else 0.0
+
+        # 7. Shops Covered
+        shops_covered = int(sub['shop_code'].nunique())
+
+        # 8. Avg Sale per Shop
+        avg_sale_per_shop = float(round(total_qty / shops_covered, 2)) if shops_covered else 0.0
+
+        # 10. Department-wise Presence (strongest department)
+        dept_breakdown = sub.groupby('department')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        top_department = dept_breakdown.index[0] if len(dept_breakdown) else None
+        top_department_qty = int(dept_breakdown.iloc[0]) if len(dept_breakdown) else 0
+
+        return {
+            'found': True,
+            'company': canonical_name,
+            'total_sale_qty': total_qty,
+            'overall_market_share_pct': market_share_pct,
+            'overall_rank': overall_rank,
+            'total_companies': total_companies,
+            'number_of_brands': num_brands,
+            'number_of_bd_segments': num_bd_segments,
+            'top_brand': top_brand,
+            'top_brand_qty': top_brand_qty,
+            'top_brand_pct_of_company': top_brand_pct_of_company,
+            'shops_covered': shops_covered,
+            'avg_sale_per_shop': avg_sale_per_shop,
+            'top_department': top_department,
+            'top_department_qty': top_department_qty,
+        }
+
+    # ------------------------------------------------------------------
+    # n) Company month-over-month check -- metric 9
+    # ------------------------------------------------------------------
+    @staticmethod
+    def company_mom_check(company_name: str, df_current, df_previous):
+        cur = df_current[df_current['company_name'].str.upper() == company_name.upper()]
+        prev = df_previous[df_previous['company_name'].str.upper() == company_name.upper()]
+
+        if cur.empty and prev.empty:
+            return {'found': False, 'message': f'Company "{company_name}" not found in either month.'}
+
+        cur_qty = int(cur['sale_qty_in_box'].sum())
+        prev_qty = int(prev['sale_qty_in_box'].sum())
+        change_qty = cur_qty - prev_qty
+        pct_change = float(round(change_qty / prev_qty * 100, 2)) if prev_qty else None
+
+        return {
+            'found': True,
+            'company': company_name,
+            'current_month_qty': cur_qty,
+            'previous_month_qty': prev_qty,
+            'change_qty': change_qty,
+            'pct_change': pct_change,
+            'is_new_entry': bool(prev_qty == 0 and cur_qty > 0),
+            'is_dropped': bool(cur_qty == 0 and prev_qty > 0),
+        }
+
+    # ------------------------------------------------------------------
+    # o) Compare 2-10 companies side by side (reuses company_full_profile's
+    #    metrics for each company)
+    # ------------------------------------------------------------------
+    def compare_companies(self, companies: list, max_companies: int = 10):
+        if len(companies) < 2:
+            return {'found': False, 'message': 'Please provide at least 2 companies to compare.'}
+        if len(companies) > max_companies:
+            return {'found': False,
+                    'message': f'Maximum {max_companies} companies allowed. You gave {len(companies)}.'}
+
+        details = {company: self.company_full_profile(company) for company in companies}
+        return {'found': True, 'companies_compared': len(companies), 'details': details}
+
 
 # ----------------------------------------------------------------------
 # Example usage / quick test

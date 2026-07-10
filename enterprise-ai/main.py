@@ -269,7 +269,17 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     Trigger: "Dennis brand ki company ki total sale kya hai", "OMSONS company ka total business
     kitna hai", "[brand] banane wali company ka overall sale"
 
-Agar sawaal upar ke kisi specific intent (2-13) se match nahi karta, "generic" use karo.
+14. "compare_companies" -- 2 se 10 companies (manufacturers) side-by-side compare karo
+    (market share, rank, brands count, top brand, shops, MoM growth, etc.).
+    params: {{"companies": ["company1", "company2", ...]}}
+    IMPORTANT: "companies" list ka ORDER wahi rakho jis order mein user ne bola -- PEHLI company
+    jo user bole use ANCHOR maana jayega (agar 3+ companies hain, yeh anchor har comparison table
+    mein fixed rehta hai, baaki companies 2-2 karke uske saath chunk hote hain) -- bilkul
+    compare_brands jaisa pattern.
+    Trigger: "in companies ka comparison karo: X, Y, Z...", "Rock and Storm vs OMSONS vs ADS
+    compare karo"
+
+Agar sawaal upar ke kisi specific intent (2-14) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -322,9 +332,27 @@ FIELD_DISPLAY_LABELS = {
     'pct_of_market': '🌍 % of Market',
     'shops_selling': '🏪 Shops Selling',
     'overall_rank': '🏆 Overall Rank',
+    'total_sale_qty': '📦 Total Sale Qty (Boxes)',
+    'overall_market_share_pct': '🌍 Market Share %',
+    'total_companies': '🏢 Total Companies',
+    'number_of_brands': '🥃 Number of Brands',
+    'number_of_bd_segments': '🏷️ BD Segments Present',
+    'top_brand': '⭐ Top Brand (Hero SKU)',
+    'top_brand_qty': '📦 Top Brand Qty',
+    'top_brand_pct_of_company': '📊 Top Brand % of Company',
+    'shops_covered': '🏪 Shops Covered',
+    'avg_sale_per_shop': '📈 Avg Sale per Shop',
+    'top_department': '🏛️ Top Department',
+    'top_department_qty': '📦 Top Department Qty',
+    'mom_pct_change': '📈 MoM Growth %',
+    'mom_change_qty': '📦 MoM Change (Qty)',
 }
 # For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
-HIGHER_IS_BETTER_FIELDS = {'sale_qty', 'pct_within_bd_segment', 'pct_of_market', 'shops_selling'}
+HIGHER_IS_BETTER_FIELDS = {
+    'sale_qty', 'pct_within_bd_segment', 'pct_of_market', 'shops_selling',
+    'total_sale_qty', 'overall_market_share_pct', 'number_of_brands',
+    'number_of_bd_segments', 'shops_covered', 'avg_sale_per_shop', 'mom_pct_change',
+}
 # For these fields, a LOWER number is the "winner" (rank #1 beats rank #26)
 LOWER_IS_BETTER_FIELDS = {'overall_rank'}
 
@@ -607,20 +635,25 @@ def run_query(spec: dict):
     return result.reset_index().to_dict('records')
 
 
+import re
 import difflib
 
 
 def fuzzy_resolve_value(user_value: str, column) -> str:
     """Resolves whatever the user typed to the closest REAL value that
     actually exists in that column -- users rarely type the exact database
-    string. Tries 3 levels, in order:
+    string. Tries 5 levels, in order:
 
     1. Exact match (case-insensitive) -- user typed it correctly already.
     2. Substring match -- user typed a short/partial version ("Royal Ace"
        -> "ROYAL ACE RARE BLENDED WHISKY"). If multiple values contain the
        text, picks the one with the highest total sale_qty_in_box (most
        likely the one meant).
-    3. Fuzzy similarity match (difflib) -- catches typos and word-order/
+    3. Normalized substring match -- same as #2 but with spaces/punctuation
+       stripped from BOTH sides first. Catches cases like "8PM" not
+       matching "8 PM PREMIUM BLACK BLENDED WHISKY" (the real value has a
+       space that plain substring matching required but the user omitted).
+    4. Fuzzy similarity match (difflib) -- catches typos and word-order/
        spelling variations that aren't a clean substring, e.g. "Semi
        Premium Whisky" -> "Semi Pre Whisky". This compares overall string
        similarity rather than requiring an exact substring.
@@ -652,7 +685,37 @@ def fuzzy_resolve_value(user_value: str, column) -> str:
         best = matches.groupby(column)[COL_QTY].sum().sort_values(ascending=False)
         return best.index[0]
 
-    # 3. Fuzzy similarity (handles typos / reordered words / partial spelling)
+    # 3. Normalized substring -- strip spaces/punctuation from both sides
+    # ("8PM" -> "8PM", "8 PM PREMIUM..." -> "8PMPREMIUM...") so minor
+    # spacing/punctuation differences don't block an otherwise-clear match.
+    normalized_user = re.sub(r'[^A-Z0-9]', '', user_value.upper())
+    if normalized_user:
+        normalized_map = {v: re.sub(r'[^A-Z0-9]', '', v) for v in unique_values}
+        norm_matches = [v for v, norm_v in normalized_map.items() if normalized_user in norm_v]
+        if norm_matches:
+            matches = df[df[column].isin(norm_matches)]
+            best = matches.groupby(column)[COL_QTY].sum().sort_values(ascending=False)
+            return best.index[0]
+
+    # 4. Prefix-based fuzzy match -- comparing a SHORT user input against a
+    # much LONGER real name unfairly drags down the similarity score (pure
+    # length mismatch), even for an obvious near-match. Fix: compare the
+    # user's input against just the first N words of each candidate (N =
+    # how many words the user typed), so a typo like "STAGY GREEN" (2
+    # words) correctly matches "STAGGY GREEN BLENDED WHISKY" by comparing
+    # against just its first 2 words ("STAGGY GREEN") -- ratio jumps from
+    # ~0.58 (full string) to ~0.96 (prefix-only), correctly passing.
+    user_word_count = len(user_value.split())
+    best_prefix_match, best_prefix_ratio = None, 0.0
+    for v in unique_values:
+        prefix = " ".join(v.split()[:user_word_count])
+        ratio = difflib.SequenceMatcher(None, user_value.upper(), prefix.upper()).ratio()
+        if ratio > best_prefix_ratio:
+            best_prefix_ratio, best_prefix_match = ratio, v
+    if best_prefix_match and best_prefix_ratio >= 0.75:
+        return best_prefix_match
+
+    # 5. Fuzzy similarity (handles typos / reordered words / partial spelling)
     close = difflib.get_close_matches(user_value.upper(), list(upper_to_actual.keys()), n=1, cutoff=0.6)
     if close:
         return upper_to_actual[close[0]]
@@ -693,6 +756,10 @@ def run_special_intent(intent: str, params: dict):
         params["brands"] = [resolve_brand_name(b) for b in params["brands"]]
     if "bd_segment" in params:
         params["bd_segment"] = resolve_bd_segment_name(params["bd_segment"])
+    if "company_name" in params:
+        params["company_name"] = resolve_company_name(params["company_name"])
+    if "companies" in params and isinstance(params["companies"], list):
+        params["companies"] = [resolve_company_name(c) for c in params["companies"]]
 
     try:
         if intent == "brand_report":
@@ -751,6 +818,39 @@ def run_special_intent(intent: str, params: dict):
                 # early return: already-formatted comparison table,
                 # bypassing the generic dict renderer entirely.
                 return render_anchor_comparison_table(complete_table, entity_key="brand")
+
+        elif intent == "compare_companies":
+            resolved_companies = [resolve_company_name(c) for c in params["companies"]]
+            engine_result = engine.compare_companies(resolved_companies)
+            if not engine_result.get("found") and "details" not in engine_result:
+                result = engine_result
+            else:
+                field_names = []
+                for detail in engine_result["details"].values():
+                    if detail.get("found"):
+                        field_names = [k for k in detail.keys() if k != "found"]
+                        break
+
+                complete_table = []
+                for company_input in resolved_companies:
+                    detail = engine_result["details"].get(company_input, {})
+                    if not detail.get("found"):
+                        row = {"company": company_input}
+                        for f in field_names:
+                            row[f] = "❌ Not Found"
+                        complete_table.append(row)
+                        continue
+                    row = {"company": company_input}
+                    for k, v in detail.items():
+                        if k == "found":
+                            continue
+                        row[k] = v
+                    complete_table.append(row)
+
+                # Same pattern as compare_brands: FIRST company mentioned
+                # is the anchor, fixed across every table; rest chunked
+                # 2-per-table alongside it.
+                return render_anchor_comparison_table(complete_table, entity_key="company")
 
         elif intent == "cross_reference_shops":
             result = engine.cross_reference_shops(
@@ -818,7 +918,18 @@ def run_special_intent(intent: str, params: dict):
             if not company_name:
                 return "Company ya brand ka naam nahi mila is query ke liye."
             company_name = resolve_company_name(company_name)
-            result = engine.company_report(company_name, top_brands=params.get("top_brands", 10))
+
+            result = engine.company_full_profile(company_name)
+            if result.get("found"):
+                # Add metric 9 (Month-over-Month growth %) if 2+ months are loaded
+                df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+                if df_current is not None:
+                    mom = SmartQueryEngine.company_mom_check(company_name, df_current, df_previous)
+                    if mom.get("found"):
+                        result["mom_current_month"] = cur_label
+                        result["mom_previous_month"] = prev_label
+                        result["mom_pct_change"] = mom["pct_change"]
+                        result["mom_change_qty"] = mom["change_qty"]
 
         elif intent == "brand_mom_check":
             df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
