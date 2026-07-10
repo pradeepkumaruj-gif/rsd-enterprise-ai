@@ -13,12 +13,22 @@ Requirements: pip install supabase pandas --break-system-packages
 
 import sys
 import os
+import html
 import pandas as pd
 from supabase import create_client
 
-# --- CONFIG: replace with your actual Supabase project values ---
-SUPABASE_URL = "https://eolwowzmrqznwgdakoqn.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # use service_role key, not anon key, for bulk insert
+# --- CONFIG: reads from environment variables (never hardcode secrets here!) ---
+# Create a local ".env" file (already in .gitignore, won't be committed) with:
+#   SUPABASE_URL=https://eolwowzmrqznwgdakoqn.supabase.co
+#   SUPABASE_KEY=sb_secret_xxxxxxxxxxxxx
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv optional; falls back to already-set environment variables
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 BATCH_SIZE = 1000  # insert in chunks to avoid payload limits
 
 
@@ -71,6 +81,13 @@ def main():
         print("Usage: python load_to_supabase.py <path_to_month_csv>")
         sys.exit(1)
 
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("ERROR: SUPABASE_URL / SUPABASE_KEY not found.")
+        print("Create a .env file in this folder with:")
+        print("  SUPABASE_URL=https://your-project.supabase.co")
+        print("  SUPABASE_KEY=sb_secret_xxxxxxxxxxxxx")
+        sys.exit(1)
+
     csv_path = sys.argv[1]
     file_source = os.path.splitext(os.path.basename(csv_path))[0]  # e.g. DI_JUN_26
 
@@ -78,6 +95,18 @@ def main():
 
     df = pd.read_csv(csv_path, low_memory=False, keep_default_na=False)
     df.columns = [clean_col(c) for c in df.columns]
+
+    # Decode HTML entities (e.g. "&amp;" -> "&") in all text columns. Source
+    # CSVs sometimes have ampersands HTML-encoded (likely from a web export
+    # step), which silently splits company/brand names into two different
+    # string values in the database ("X & Y" vs "X &amp; Y" being treated
+    # as two different companies) -- undercounting their true totals and
+    # corrupting rank/market-share calculations. Fixing this at load time
+    # means it can never happen again for new months' data.
+    text_cols = df.select_dtypes(include='object').columns
+    for col in text_cols:
+        df[col] = df[col].apply(lambda x: html.unescape(x) if isinstance(x, str) else x)
+
     df = clean_numeric_columns(df)
     df['file_source'] = file_source
 

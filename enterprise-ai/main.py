@@ -187,14 +187,34 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
 - Yeh galat guess se BEHTAR hai ki tum clearly bol do "clear nahi hai" -- ek galat-samjha sawaal
   ka "sahi" number dena, galat sawaal poochne se zyada nuksaandeh hai.
 
+⚠️ CRITICAL -- ENTITY NAMES (brand/company/shop/TSE) KO VERIFY MAT KARO:
+Tumhare paas brands ki POORI list NAHI hai (300+ brands hain, sab list mein nahi diye ja sakte --
+sirf bd_segment jaisi chhoti lists di gayi hain). Isliye jab user koi brand/company/shop/TSE ka
+naam bole jo tumhe "unfamiliar" ya "ajeeb" lage (jaise "White and Blue", "Stagy Green", chhote/
+partial naam) -- ISE TURANT VALID BRAND/ENTITY NAME MAAN LO aur "query_understood": true rakho,
+filters/params mein daal do jaisa bola gaya. TUMHARA KAAM YEH VERIFY KARNA NAHI HAI KI YEH REAL
+HAI YA NAHI -- woh kaam downstream Python fuzzy-matching system karta hai (jo asli data dekh
+kar verify/resolve karta hai). Agar naam galat nikla, system khud "not found" bol dega baad mein.
+"query_understood": false SIRF tab karo jab SAWAAL KA STRUCTURE/INTENT unclear ho (jaise "vendor"
+ka do matlab, ya kaunsa intent/metric chahiye pata na chale) -- kisi entity NAME ke unfamiliar
+lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
+
 "intent" batata hai kaunsa engine chalana hai. Available intents:
 
 1. "generic" (default) -- flexible filter/group_by/metric queries jaisa upar diya hai. Ismein
    "metric" "sum" / "count_distinct" / "market_share" ho sakta hai (neeche detail hai).
 
-2. "brand_report" -- ek specific brand ka poora profile (market %, top shops, bd_segment).
+2. "brand_report" -- ek specific brand ka poora profile: total market share %, bd_segment
+   market share %, department-wise sale breakdown (with per-department market share), top
+   shops -- SAB EK SAATH. Yeh intent use karo jab bhi user brand ke baare mein multiple
+   metrics ek saath poochta hai (jaise "market share" + "department wise" dono ek sawaal mein).
    params: {{"brand_name": "..."}}
-   Trigger: "Dennis ka poora report do", "DENNIS SPECIAL GOLD WHISKY ke baare mein batao"
+   IMPORTANT: agar sawaal mein "department wise sale" ke SAATH "market share" ya "segment
+   share" bhi poocha gaya ho, YEH intent use karo (generic MAT karo) -- generic sirf plain
+   sum dega, market share % nahi dega. brand_report in dono ko ek saath deta hai.
+   Trigger: "Dennis ka poora report do", "DENNIS SPECIAL GOLD WHISKY ke baare mein batao",
+   "Dennis ki department wise sale with total market share and segment market share" (-> yeh
+   brand_report hai, generic NAHI -- kyunki market share bhi chahiye)
 
 3. "smart_query" -- BD Segment ke andar ek specific brand ka position.
    params: {{"bd_segment": "...", "brand_name": "..."}}
@@ -313,16 +333,20 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     (-> dimension: "department", value: "DCCWS" -- NO brand filter, overall department growth),
     "TSE Raj Kumar ka growth kya hai", "is shop ka growth batao"
 
-17. "compare_dimension_values" -- 2 se 10 DEPARTMENTS, SHOPS, ya TSEs (SAME dimension) ko
-    side-by-side compare karo (bilkul compare_brands jaisa pattern) -- total sale, rank, brands
-    count, top brand, market share.
+17. "compare_dimension_values" -- 2 se 10 DEPARTMENTS, SHOPS, TSEs, BD SEGMENTS, LIQUOR TYPES,
+    ya PACK SIZES (SAME dimension) ko side-by-side compare karo (bilkul compare_brands jaisa
+    pattern) -- total sale, rank, brands count, top brand, market share.
     params: {{"dimension": "department", "values": ["DCCWS", "DSIIDC", ...]}}
-    "dimension" ek hi ho sakta hai: "department", "shop_code", "party" (shop name), ya "tse"
+    "dimension" ho sakta hai: "department", "shop_code", "party" (shop name), "tse", "bd_segment",
+    "liquor_type", ya "pack_size" -- (brand aur company ke liye "compare_brands"/"compare_companies"
+    use karo, yeh unke liye zyada detailed hai).
     IMPORTANT: "values" list ka ORDER wahi rakho jis order mein user ne bola -- PEHLA value jo
     user bole use ANCHOR maana jayega (agar 3+ values hain, anchor har table mein fixed rehta
     hai, baaki 2-2 karke chunk hote hain) -- bilkul compare_brands jaisa.
     Trigger: "DCCWS vs DSIIDC compare karo", "in departments ka comparison karo: DCCWS, DSIIDC,
-    DTTDC", "TSE Raj vs TSE Amit compare karo"
+    DTTDC", "TSE Raj vs TSE Amit compare karo", "Semi Pre Whisky vs Regular Whisky compare karo"
+    (-> dimension: "bd_segment"), "Whisky vs Vodka compare karo" (-> dimension: "liquor_type"),
+    "Bottle vs Quarter compare karo" (-> dimension: "pack_size")
 
 18. "brand_weak_shops_analysis" -- ek brand ke BOTTOM/WEAKEST shops YA TOP/STRONGEST shops
     dhoondo (jaha sabse kam YA sabse zyada bikta hai), phir unhi shops mein dekho konse brands
@@ -330,7 +354,10 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     params: {{"brand_name": "...", "bottom_n_shops": 10, "compare_brand": null,
     "top_n_other_brands": 5, "find_bottom": true}}
     - "find_bottom": true -- jab user "lowest/weakest/kam bikne wale" shops pooche (default).
-    - "find_bottom": false -- jab user "top/best/highest/sabse zyada bikne wale" shops pooche.
+    - "find_bottom": false -- jab user "top/best/highest/sabse zyada bikne wale/top 10 mein
+      aati hai" shops pooche -- "kis shop mein iski sale TOP 10 mein aati hai" bhi isi ka matlab
+      hai (us BRAND ki apni sabse zyada bikne wali 10 shops -- na ki us shop ke top-10 brands
+      mein se ek).
     - "compare_brand" OPTIONAL hai -- agar user ek specific doosra brand naam de ("Dennis ke
       weak shops mein Royal Ace ka kya haal hai"), yahan daalo -- sirf uska data un shops mein
       dikhega. Agar user generic "top brands wahan" pooche, "compare_brand" null rakho --
@@ -338,7 +365,9 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     Trigger: "Dennis ke lowest 10 shops kaunse hain aur wahan top 5 brands kaunse chal rahe hain"
     (-> find_bottom: true, compare_brand: null), "Dennis ke top selling shops mein kaunse aur
     brands chal rahe hain" (-> find_bottom: false, compare_brand: null), "Dennis ke weak shops
-    mein Royal Ace ki sale kya hai" (-> find_bottom: true, compare_brand: "Royal Ace")
+    mein Royal Ace ki sale kya hai" (-> find_bottom: true, compare_brand: "Royal Ace"), "Dennis
+    ki sale konse shop par top 10 mein aati hai aur wahi shop par Royal Ace ki sale kya hai"
+    (-> brand_name: "Dennis", find_bottom: false, bottom_n_shops: 10, compare_brand: "Royal Ace")
 
 Agar sawaal upar ke kisi specific intent (2-18) se match nahi karta, "generic" use karo.
 
@@ -433,6 +462,10 @@ yeh dimension use karo.
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
+- ⚠️ EXCEPTION to above: agar "department/shop/tse wise" ke SAATH "market share" ya "segment
+  share" (specific ek brand ke liye) bhi poocha ho, yeh generic group_by MAT use karo -- iske
+  liye "brand_report" intent use karo (woh market share % + department breakdown dono deta hai
+  ek saath). Generic sirf tab use karo jab SIRF plain quantity/sum chahiye ho, % share nahi.
 - filters mein JITNE BHI dimensions ka specific value user ne mention kiya ho, sab daalo (multiple filters ek saath chal sakte hain -- jaise "April mein DCCWS department ka Whisky" -> {{"month": "Apr", "department": "DCCWS", "liquor_type": "Whisky"}})
 - Agar do mahino ka comparison chahiye ("April vs May"), month ko group_by mein daalo, filter mein nahi
 - top_n default 10, agar "top 5" jaisa kuch bola hai to wahi number daalo
@@ -689,13 +722,24 @@ def render_data_deterministically(data) -> str:
 def parse_query_with_claude(question: str) -> dict:
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=300,
+        max_tokens=700,  # schema has grown a lot (18 intents, many fields) -- 300 was
+                         # too small and caused JSON to get cut off mid-structure for
+                         # complex/combined queries, crashing the parser entirely.
         system=QUERY_PARSER_SYSTEM,
         messages=[{"role": "user", "content": question}],
     )
     text = response.content[0].text.strip()
     text = text.replace("```json", "").replace("```", "").strip()
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Safety net: sometimes the model adds stray text before/after the
+        # JSON despite instructions -- try extracting just the {...} block.
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
 
 
 MONTH_NAME_TO_ABBR = {
@@ -952,9 +996,18 @@ def fuzzy_resolve_value(user_value: str, column) -> str:
     # 3. Normalized substring -- strip spaces/punctuation from both sides
     # ("8PM" -> "8PM", "8 PM PREMIUM..." -> "8PMPREMIUM...") so minor
     # spacing/punctuation differences don't block an otherwise-clear match.
-    normalized_user = re.sub(r'[^A-Z0-9]', '', user_value.upper())
+    # Also treat "&" and "and" as EQUIVALENT before stripping (convert "&"
+    # to "AND" first) -- otherwise "White and Blue" wouldn't match the real
+    # brand "WHITE & BLUE SELECT WHISKY", since stripping "&" to nothing
+    # loses the word entirely while the user's "and" remains, breaking the
+    # substring match.
+    def _normalize(s: str) -> str:
+        s = s.upper().replace('&', ' AND ')
+        return re.sub(r'[^A-Z0-9]', '', s)
+
+    normalized_user = _normalize(user_value)
     if normalized_user:
-        normalized_map = {v: re.sub(r'[^A-Z0-9]', '', v) for v in unique_values}
+        normalized_map = {v: _normalize(v) for v in unique_values}
         norm_matches = [v for v, norm_v in normalized_map.items() if normalized_user in norm_v]
         if norm_matches:
             matches = df[df[column].isin(norm_matches)]
@@ -1138,7 +1191,7 @@ def run_special_intent(intent: str, params: dict):
         elif intent == "compare_dimension_values":
             dim_col = DIMENSIONS.get(params.get("dimension"))
             if not dim_col:
-                return "Valid dimension chahiye (department, shop_code, party, ya tse)."
+                return "Valid dimension chahiye (department, shop_code, party, tse, bd_segment, liquor_type, ya pack_size)."
             resolved_values = [fuzzy_resolve_value(str(v), dim_col) for v in params["values"]]
             engine_result = engine.compare_dimension_values(dim_col, resolved_values)
             if not engine_result.get("found") and "details" not in engine_result:
