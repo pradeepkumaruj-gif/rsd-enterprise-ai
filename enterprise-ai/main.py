@@ -444,6 +444,21 @@ def run_query(spec: dict):
         total = filtered[COL_QTY].sum()
         return f"Total Sale Qty (boxes): {total}"
 
+    # If "month" is combined with another dimension (e.g. brand + month),
+    # PIVOT so each month becomes its own COLUMN -- one row per brand, with
+    # "Apr-26"/"May-26" side by side -- instead of repeating a row for every
+    # brand-month combination (which was hard to compare/scan).
+    if COL_MONTH in group_by and len(group_by) > 1:
+        other_dims = [c for c in group_by if c != COL_MONTH]
+        pivot = filtered.pivot_table(
+            index=other_dims, columns=COL_MONTH, values=COL_QTY, aggfunc='sum', fill_value=0
+        )
+        pivot['Total'] = pivot.sum(axis=1)
+        pivot = pivot.sort_values('Total', ascending=not sort_desc)
+        pivot = pivot.head(top_n)
+        pivot.columns.name = None
+        return pivot.reset_index().to_dict('records')
+
     result = filtered.groupby(group_by)[COL_QTY].sum()
     result = result.sort_values(ascending=not sort_desc)
     result = result.head(top_n)
