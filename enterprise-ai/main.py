@@ -214,7 +214,11 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
 
 7. "compare_brands" -- 2 se 10 brands side-by-side compare.
    params: {{"brands": ["brand1", "brand2", ...]}}
-   Trigger: "Dennis vs 8PM vs Royal Ace compare karo"
+   IMPORTANT: "brands" list ka ORDER wahi rakho jis order mein user ne brands bole -- PEHLA brand
+   jo user bole use ANCHOR maana jayega (agar 3+ brands hain, yeh anchor har comparison table mein
+   fixed rehta hai, baaki brands 2-2 karke uske saath chunk hote hain).
+   Trigger: "Dennis vs 8PM vs Royal Ace compare karo", "Royal Ace ka in sab brands se comparison
+   karo: X, Y, Z, W..." (-> brands: ["Royal Ace", "X", "Y", "Z", "W"], Royal Ace anchor hai)
 
 8. "cross_reference_shops" -- Brand A ke top shops mein Brand B kitna bikta hai (gap analysis).
    params: {{"primary_brand": "...", "secondary_brand": "...", "top_n": 10}}
@@ -309,6 +313,99 @@ Rules:
 """
 
 
+FIELD_DISPLAY_LABELS = {
+    'brand': '🥃 Brand',
+    'company': '🏢 Company',
+    'bd_segment': '🏷️ BD Segment',
+    'sale_qty': '📦 Sale Qty (Boxes)',
+    'pct_within_bd_segment': '📊 % Within Segment',
+    'pct_of_market': '🌍 % of Market',
+    'shops_selling': '🏪 Shops Selling',
+    'overall_rank': '🏆 Overall Rank',
+}
+# For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
+HIGHER_IS_BETTER_FIELDS = {'sale_qty', 'pct_within_bd_segment', 'pct_of_market', 'shops_selling'}
+# For these fields, a LOWER number is the "winner" (rank #1 beats rank #26)
+LOWER_IS_BETTER_FIELDS = {'overall_rank'}
+
+
+def _build_comparison_row(field: str, chunk: list) -> str:
+    """Builds one table row, auto-highlighting whichever entity 'wins' that
+    field (bold + 🥇) -- purely numeric comparison in Python, no LLM
+    judgment involved, so the highlight is always factually correct."""
+    label = FIELD_DISPLAY_LABELS.get(field, "📌 " + field.replace("_", " ").title())
+    values = [item.get(field, "") for item in chunk]
+
+    best_idx = None
+    if field in HIGHER_IS_BETTER_FIELDS or field in LOWER_IS_BETTER_FIELDS:
+        numeric_values = []
+        for v in values:
+            try:
+                numeric_values.append(float(v))
+            except (ValueError, TypeError):
+                numeric_values.append(None)
+        if all(v is not None for v in numeric_values) and len(set(numeric_values)) > 1:
+            target = max(numeric_values) if field in HIGHER_IS_BETTER_FIELDS else min(numeric_values)
+            best_idx = numeric_values.index(target)
+
+    cells = [f"**{v} 🥇**" if idx == best_idx else str(v) for idx, v in enumerate(values)]
+    return f"| {label} | " + " | ".join(cells) + " |"
+
+
+def _build_comparison_block(chunk: list, entity_key: str, fields: list, table_num: int, total_tables: int) -> str:
+    title = "### 🥃 Brand Comparison"
+    if total_tables > 1:
+        title += f" — Table {table_num}/{total_tables}"
+    header = "| 🏷️ Field | " + " | ".join(f"**{r.get(entity_key, '')}**" for r in chunk) + " |"
+    sep = "| --- | " + " | ".join("---" for _ in chunk) + " |"
+    rows = [_build_comparison_row(f, chunk) for f in fields]
+    return "\n".join([title, "", header, sep] + rows)
+
+
+def render_anchor_comparison_table(records: list, entity_key: str, others_per_table: int = 2) -> str:
+    """Keeps records[0] (the FIRST brand the user mentioned -- the anchor)
+    fixed in every table, and chunks the remaining records into groups of
+    `others_per_table`, each paired with the anchor to form one table.
+    E.g. comparing 'Royal Ace' against 6 other brands produces 3 tables,
+    each showing Royal Ace + 2 others (3 columns per table, readable on
+    screen), rather than one giant table or sequential unrelated chunks."""
+    if not records:
+        return "_Koi data nahi mila is comparison ke liye._"
+    if len(records) == 1:
+        return render_comparison_table(records, entity_key, max_per_table=3)
+
+    anchor = records[0]
+    others = records[1:]
+    fields = [k for k in anchor.keys() if k != entity_key]
+    chunks = [[anchor] + others[i:i + others_per_table] for i in range(0, len(others), others_per_table)]
+
+    blocks = [
+        _build_comparison_block(chunk, entity_key, fields, idx + 1, len(chunks))
+        for idx, chunk in enumerate(chunks)
+    ]
+    return "\n\n".join(blocks)
+
+
+def render_comparison_table(records: list, entity_key: str, max_per_table: int = 3) -> str:
+    """Renders a brand/company/etc comparison in 'Field as rows, Entity as
+    columns' format (a vertical side-by-side profile). When comparing more
+    than `max_per_table` entities, splits into multiple separate tables of
+    `max_per_table` columns each (a fresh table every 3)."""
+    if not records:
+        return "_Koi data nahi mila is comparison ke liye._"
+
+    fields = [k for k in records[0].keys() if k != entity_key]
+    chunks = [records[i:i + max_per_table] for i in range(0, len(records), max_per_table)]
+
+    blocks = [
+        _build_comparison_block(chunk, entity_key, fields, idx + 1, len(chunks))
+        for idx, chunk in enumerate(chunks)
+    ]
+    return "\n\n".join(blocks)
+
+    return "\n\n".join(tables)
+
+
 def dicts_to_markdown_table(records: list) -> str:
     """Builds a markdown table directly from a list of dicts -- pure Python
     string formatting, zero LLM involvement. This is the ONLY place table
@@ -372,6 +469,48 @@ def parse_query_with_claude(question: str) -> dict:
     return json.loads(text)
 
 
+MONTH_NAME_TO_ABBR = {
+    'january': 'jan', 'february': 'feb', 'march': 'mar', 'april': 'apr',
+    'may': 'may', 'june': 'jun', 'july': 'jul', 'august': 'aug',
+    'september': 'sep', 'october': 'oct', 'november': 'nov', 'december': 'dec',
+}
+
+RELATIVE_MONTH_CURRENT = {
+    'current month', 'this month', 'is mahine', 'is mahina', 'isse mahina',
+    'latest month', 'current', 'abhi ka mahina',
+}
+RELATIVE_MONTH_PREVIOUS = {
+    'previous month', 'last month', 'past month', 'pichla mahina',
+    'pichle mahine', 'purana mahina', 'gaya mahina',
+}
+
+
+def resolve_month_reference(value: str) -> str:
+    """Handles month references the plain fuzzy_resolve_value can't:
+    1. Relative terms ("current month", "last month", "pichla mahina") --
+       resolved to the actual chronologically latest/previous month label.
+    2. Bare month names without a year ("April") -- fuzzy_resolve_value's
+       difflib similarity check was too strict for "April" vs "Apr-26"
+       (below the 0.6 cutoff due to length difference), so we normalize
+       full month names to their 3-letter form first ("April" -> "Apr"),
+       which then matches via plain substring containment.
+    """
+    v = value.strip().lower()
+
+    if v in RELATIVE_MONTH_CURRENT:
+        _, _, cur_label, _ = get_current_and_previous_month_df()
+        return cur_label or value
+    if v in RELATIVE_MONTH_PREVIOUS:
+        _, _, _, prev_label = get_current_and_previous_month_df()
+        return prev_label or value
+
+    for full_name, abbr in MONTH_NAME_TO_ABBR.items():
+        if v == full_name or v.startswith(full_name + ' '):
+            return value.lower().replace(full_name, abbr)
+
+    return value
+
+
 def run_query(spec: dict):
     filtered = df
 
@@ -383,6 +522,8 @@ def run_query(spec: dict):
     for dim, value in (spec.get("filters") or {}).items():
         col = DIMENSIONS.get(dim)
         if col and col in filtered.columns:
+            if dim == "month":
+                value = resolve_month_reference(str(value))
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
@@ -574,7 +715,42 @@ def run_special_intent(intent: str, params: dict):
             )
 
         elif intent == "compare_brands":
-            result = engine.compare_brands(params["brands"])
+            engine_result = engine.compare_brands(params["brands"])
+            if not engine_result.get("found") and "details" not in engine_result:
+                result = engine_result
+            else:
+                # Determine the full field set from any found brand, so
+                # not-found brands can show "Not Found" in EVERY column
+                # (not blank cells).
+                field_names = []
+                for detail in engine_result["details"].values():
+                    if detail.get("found"):
+                        field_names = [k for k in detail.keys() if k != "found"]
+                        break
+
+                complete_table = []
+                for brand_input in params["brands"]:
+                    detail = engine_result["details"].get(brand_input, {})
+                    if not detail.get("found"):
+                        row = {"brand": brand_input}
+                        for f in field_names:
+                            row[f] = "❌ Not Found"
+                        complete_table.append(row)
+                        continue
+                    row = {"brand": brand_input}
+                    for k, v in detail.items():
+                        if k == "found":
+                            continue
+                        row[k] = ", ".join(str(x) for x in v) if isinstance(v, list) else v
+                    complete_table.append(row)
+
+                # Order is preserved (NOT sorted by sale_qty) -- the FIRST
+                # brand the user mentioned is the "anchor" and stays fixed
+                # across every table; the rest are chunked 2-per-table
+                # alongside it.
+                # early return: already-formatted comparison table,
+                # bypassing the generic dict renderer entirely.
+                return render_anchor_comparison_table(complete_table, entity_key="brand")
 
         elif intent == "cross_reference_shops":
             result = engine.cross_reference_shops(
