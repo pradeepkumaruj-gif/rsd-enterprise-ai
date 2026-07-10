@@ -230,7 +230,11 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
    "sections": ["losers"]}}
    - "bd_segment_filter" optional hai -- agar user ek SPECIFIC category naam bole (jaise "Semi Pre
      Whisky segment mein" ya "Regular Whisky mein"), yahan uska naam daalo taaki result sirf usi
-     category tak scoped rahe.
+     category tak scoped rahe. IMPORTANT: user kabhi-kabhi ek BRAND ka naam deta hai category ki
+     jagah (jaise "Royal Ace segment mein top gainer" -- "Royal Ace" ek brand hai, segment nahi) --
+     yeh BILKUL VALID hai, system automatically us brand ka bd_segment nikal lega. Aise cases mein
+     bhi "query_understood": true rakho aur seedha "Royal Ace" (ya jo bhi brand bola gaya) ko
+     bd_segment_filter mein daal do -- yeh clarification maangne wali situation NAHI hai.
    - "sections" IMPORTANT hai -- user ne EXACTLY kya poocha, sirf wahi section(s) daalo is list mein.
      Options: "gainers", "losers", "new_entries", "dropped". Agar sirf "losers" poocha hai, sirf
      ["losers"] daalo -- gainers/new_entries/dropped MAT daalo. Agar sab kuch poocha ("gainers
@@ -244,7 +248,9 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
    grow kiye" (-> sections: ["gainers"]), "Semi Pre Whisky segment mein new brand entry" (->
    bd_segment_filter: "Semi Pre Whisky", sections: ["new_entries"]), "kaunse brands band ho gaye"
    (-> sections: ["dropped"]), "Regular Whisky segment looser" (-> intent: mom_gainers_losers,
-   bd_segment_filter: "Regular Whisky", sections: ["losers"], NOT brand_mom_check)
+   bd_segment_filter: "Regular Whisky", sections: ["losers"], NOT brand_mom_check), "Royal Ace
+   segment mein top gainer" (-> bd_segment_filter: "Royal Ace" -- a brand name is fine here,
+   system resolves it to Royal Ace's actual bd_segment automatically)
 
 10. "brand_ranking" -- ek brand ka rank BD Segment aur overall market mein.
     params: {{"brand_name": "..."}}
@@ -381,7 +387,8 @@ def _build_comparison_row(field: str, chunk: list) -> str:
 
 
 def _build_comparison_block(chunk: list, entity_key: str, fields: list, table_num: int, total_tables: int) -> str:
-    title = "### 🥃 Brand Comparison"
+    icon_and_label = {"brand": "🥃 Brand", "company": "🏢 Company"}.get(entity_key, "📋 Item")
+    title = f"### {icon_and_label} Comparison"
     if total_tables > 1:
         title += f" — Table {table_num}/{total_tables}"
     header = "| 🏷️ Field | " + " | ".join(f"**{r.get(entity_key, '')}**" for r in chunk) + " |"
@@ -732,6 +739,25 @@ def resolve_bd_segment_name(partial_name: str) -> str:
     return fuzzy_resolve_value(partial_name, COL_BD_SEGMENT)
 
 
+def resolve_segment_reference(value: str) -> str:
+    """Handles a common phrasing pattern: 'Royal Ace segment mein...' --
+    where the user actually means 'the bd_segment that Royal Ace belongs
+    to', not a literal segment named 'Royal Ace'. Tries resolving as a real
+    bd_segment value first; if that doesn't match anything real, tries
+    resolving as a BRAND name instead and returns THAT brand's bd_segment.
+    Falls back to the original bd_segment resolution if neither works."""
+    resolved_as_segment = resolve_bd_segment_name(value)
+    if resolved_as_segment.upper() in df[COL_BD_SEGMENT].astype(str).str.upper().unique():
+        return resolved_as_segment
+
+    resolved_as_brand = resolve_brand_name(value)
+    match = df[df[COL_BRAND].str.upper() == resolved_as_brand.upper()]
+    if not match.empty:
+        return match[COL_BD_SEGMENT].iloc[0]
+
+    return resolved_as_segment
+
+
 def resolve_company_name(partial_name: str) -> str:
     return fuzzy_resolve_value(partial_name, COL_COMPANY)
 
@@ -864,7 +890,7 @@ def run_special_intent(intent: str, params: dict):
 
             bd_seg_filter = params.get("bd_segment_filter")
             if bd_seg_filter:
-                bd_seg_filter = resolve_bd_segment_name(bd_seg_filter)
+                bd_seg_filter = resolve_segment_reference(bd_seg_filter)
                 df_current = df_current[df_current[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
                 df_previous = df_previous[df_previous[COL_BD_SEGMENT].str.upper() == bd_seg_filter.upper()]
 
