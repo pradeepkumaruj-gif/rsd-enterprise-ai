@@ -352,7 +352,7 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     dhoondo (jaha sabse kam YA sabse zyada bikta hai), phir unhi shops mein dekho konse brands
     zyada chal rahe hain (ya ek SPECIFIC competitor brand ka wahan performance).
     params: {{"brand_name": "...", "bottom_n_shops": 10, "compare_brand": null,
-    "top_n_other_brands": 5, "find_bottom": true}}
+    "top_n_other_brands": 5, "find_bottom": true, "restrict_to_own_segment": false}}
     - "find_bottom": true -- jab user "lowest/weakest/kam bikne wale" shops pooche (default).
     - "find_bottom": false -- jab user "top/best/highest/sabse zyada bikne wale/top 10 mein
       aati hai" shops pooche -- "kis shop mein iski sale TOP 10 mein aati hai" bhi isi ka matlab
@@ -362,12 +362,20 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
       weak shops mein Royal Ace ka kya haal hai"), yahan daalo -- sirf uska data un shops mein
       dikhega. Agar user generic "top brands wahan" pooche, "compare_brand" null rakho --
       har shop ke top N brands dikhenge.
+    - "restrict_to_own_segment": true -- jab user "iske SEGMENT mein top brands" jaisa bole
+      (jaise "Dennis ke segment mein top 5 brands"), tab top brands sirf Dennis ke APNE
+      bd_segment (jaise Regular Whisky) ke andar se dhoonde jayenge, sab brands se nahi. Result
+      mein har brand ka "market share % (usi shop ke usi segment ke andar)" bhi milta hai, rank
+      ki jagah -- yeh zyada useful business metric hai.
     Trigger: "Dennis ke lowest 10 shops kaunse hain aur wahan top 5 brands kaunse chal rahe hain"
     (-> find_bottom: true, compare_brand: null), "Dennis ke top selling shops mein kaunse aur
     brands chal rahe hain" (-> find_bottom: false, compare_brand: null), "Dennis ke weak shops
     mein Royal Ace ki sale kya hai" (-> find_bottom: true, compare_brand: "Royal Ace"), "Dennis
     ki sale konse shop par top 10 mein aati hai aur wahi shop par Royal Ace ki sale kya hai"
-    (-> brand_name: "Dennis", find_bottom: false, bottom_n_shops: 10, compare_brand: "Royal Ace")
+    (-> brand_name: "Dennis", find_bottom: false, bottom_n_shops: 10, compare_brand: "Royal Ace"),
+    "Dennis ki sabse kam sale wali 10 shops batao, waha Dennis ke SEGMENT mein top 5 selling
+    brands aur un shop ka market share" (-> brand_name: "Dennis", find_bottom: true,
+    bottom_n_shops: 10, top_n_other_brands: 5, restrict_to_own_segment: true)
 
 Agar sawaal upar ke kisi specific intent (2-18) se match nahi karta, "generic" use karo.
 
@@ -546,6 +554,9 @@ FIELD_DISPLAY_LABELS = {
     'total_count': '🔢 Total Count',
     'top_brand_pct': '📊 Top Brand % of Total',
     'value': '📊 Value',
+    'top_brand_market_share_pct_at_shop': '🌍 Market Share % (Segment)',
+    'rank_here': '🏆 Rank Here',
+    'top_brand_here': '⭐ Top Brand Here',
     'item': '📌 Item',
 }
 # For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
@@ -1233,6 +1244,7 @@ def run_special_intent(intent: str, params: dict):
                 compare_brand=compare_brand,
                 top_n_other_brands=params.get("top_n_other_brands", 5),
                 find_bottom=params.get("find_bottom", True),
+                restrict_to_own_segment=params.get("restrict_to_own_segment", False),
             )
             if engine_result.get("found"):
                 # 'rows' is already a flat list of dicts -- return it

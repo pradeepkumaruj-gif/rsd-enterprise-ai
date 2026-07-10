@@ -735,18 +735,24 @@ class SmartQueryEngine:
     # ------------------------------------------------------------------
     def brand_weak_shops_analysis(self, brand_name: str, bottom_n_shops: int = 10,
                                    compare_brand: str = None, top_n_other_brands: int = 5,
-                                   find_bottom: bool = True):
+                                   find_bottom: bool = True, restrict_to_own_segment: bool = False):
         df = self.df
         sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
         if sub.empty:
             return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        # If restricting to the brand's own bd_segment, only consider brands
+        # within that same segment when finding "top brands at this shop" --
+        # e.g. only other Regular Whisky brands, not every brand overall.
+        own_bd_segment = sub['bd_segment'].unique()
+        universe_df = df[df['bd_segment'].isin(own_bd_segment)] if restrict_to_own_segment else df
 
         shop_sales = (sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
                       .sum().sort_values(ascending=find_bottom).head(bottom_n_shops))
 
         rows = []
         for (shop_code, shop_name), brand_qty in shop_sales.items():
-            shop_df = df[df['shop_code'] == shop_code]
+            shop_df = universe_df[universe_df['shop_code'] == shop_code]
 
             if compare_brand:
                 comp_sub = shop_df[shop_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
@@ -758,9 +764,17 @@ class SmartQueryEngine:
                     f'{compare_brand}_qty': comp_qty,
                 })
             else:
+                # Market share % = this brand's qty at this shop / TOTAL
+                # qty at this shop (within the same universe -- own segment
+                # if restrict_to_own_segment, else all brands) -- replaces
+                # a plain rank number with a more useful business metric.
+                shop_total_qty = int(shop_df['sale_qty_in_box'].sum())
                 top_here = (shop_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
                             .sum().sort_values(ascending=False).head(top_n_other_brands))
                 for rank, (other_brand, other_qty) in enumerate(top_here.items(), start=1):
+                    market_share_pct = (
+                        round(int(other_qty) / shop_total_qty * 100, 2) if shop_total_qty else 0.0
+                    )
                     rows.append({
                         'shop_code': shop_code,
                         'shop_name': shop_name,
@@ -768,12 +782,15 @@ class SmartQueryEngine:
                         'rank_here': rank,
                         'top_brand_here': other_brand,
                         'top_brand_qty': int(other_qty),
+                        'top_brand_market_share_pct_at_shop': market_share_pct,
                     })
 
         return {
             'found': True,
             'brand': brand_name,
             'analysis_type': 'weakest_shops' if find_bottom else 'strongest_shops',
+            'restricted_to_own_bd_segment': restrict_to_own_segment,
+            'bd_segment': list(own_bd_segment) if restrict_to_own_segment else None,
             'n_shops': bottom_n_shops,
             'compare_brand': compare_brand,
             'rows': rows,
