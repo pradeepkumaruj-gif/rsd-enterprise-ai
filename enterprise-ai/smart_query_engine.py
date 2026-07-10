@@ -574,6 +574,48 @@ class SmartQueryEngine:
         details = {company: self.company_full_profile(company) for company in companies}
         return {'found': True, 'companies_compared': len(companies), 'details': details}
 
+    # ------------------------------------------------------------------
+    # p) Growth breakdown -- WHERE (which department/shop/TSE) did a
+    #    brand's month-over-month growth/decline actually come from.
+    #    NOTE: this only decomposes growth by data dimensions already in
+    #    the dataset -- it CANNOT explain external business causes
+    #    (marketing, pricing, competitor actions) since that data doesn't
+    #    exist in this table at all.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def brand_growth_breakdown(brand_name: str, df_current, df_previous,
+                                breakdown_by: str = 'department', top_n: int = 10):
+        cur = df_current[df_current['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        prev = df_previous[df_previous['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+
+        if cur.empty and prev.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found in either month.'}
+
+        cur_group = cur.groupby(breakdown_by)['sale_qty_in_box'].sum()
+        prev_group = prev.groupby(breakdown_by)['sale_qty_in_box'].sum()
+
+        merged = pd.DataFrame({'current_qty': cur_group, 'previous_qty': prev_group}).fillna(0)
+        merged['change_qty'] = (merged['current_qty'] - merged['previous_qty']).astype(int)
+        merged['current_qty'] = merged['current_qty'].astype(int)
+        merged['previous_qty'] = merged['previous_qty'].astype(int)
+
+        total_change = int(merged['change_qty'].sum())
+        if total_change != 0:
+            merged['pct_of_total_change'] = (merged['change_qty'] / total_change * 100).round(2)
+        else:
+            merged['pct_of_total_change'] = 0.0
+
+        merged = merged.sort_values('change_qty', ascending=False).reset_index()
+        merged = merged.rename(columns={breakdown_by: breakdown_by})
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'breakdown_by': breakdown_by,
+            'overall_change_qty': total_change,
+            'breakdown': merged.head(top_n).to_dict('records'),
+        }
+
 
 # ----------------------------------------------------------------------
 # Example usage / quick test

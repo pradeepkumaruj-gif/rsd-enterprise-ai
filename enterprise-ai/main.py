@@ -285,7 +285,17 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     Trigger: "in companies ka comparison karo: X, Y, Z...", "Rock and Storm vs OMSONS vs ADS
     compare karo"
 
-Agar sawaal upar ke kisi specific intent (2-14) se match nahi karta, "generic" use karo.
+15. "brand_growth_breakdown" -- kisi brand ki month-over-month growth/decline KAHAN SE aayi
+    (kaunsa department, shop, ya TSE sabse zyada contribute kar raha hai). NOTE: yeh sirf DATA
+    breakdown deta hai (department/shop/TSE), business "reason" (marketing, pricing, competitor)
+    NAHI de sakta -- woh data ismein hai hi nahi.
+    params: {{"brand_name": "...", "breakdown_by": "department", "top_n": 10}}
+    "breakdown_by" ek hi ho sakta hai: "department", "shop_code", ya "tse"
+    Trigger: "Royal Black ki growth kahan se aayi department wise", "kis shop se sabse zyada
+    growth aayi Dennis ki", "Royal Black sales growth reason" (-> yeh breakdown_by chahega,
+    default "department" use karo agar user specify na kare)
+
+Agar sawaal upar ke kisi specific intent (2-15) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -377,6 +387,11 @@ FIELD_DISPLAY_LABELS = {
     'subset_qty': '📦 Qty',
     'brand_qty': '📦 Brand Qty',
     'brand_sale_qty': '📦 Brand Sale Qty',
+    'breakdown_by': '🔍 Breakdown By',
+    'overall_change_qty': '🔄 Overall Change (Qty)',
+    'breakdown': '📊 Growth Breakdown',
+    'salesman_tse': '👤 TSE',
+    'pct_of_total_change': '📊 % of Total Change',
 }
 # For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
 HIGHER_IS_BETTER_FIELDS = {
@@ -928,6 +943,23 @@ def run_special_intent(intent: str, params: dict):
                 # is the anchor, fixed across every table; rest chunked
                 # 2-per-table alongside it.
                 return render_anchor_comparison_table(complete_table, entity_key="company")
+
+        elif intent == "brand_growth_breakdown":
+            df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+            if df_current is None:
+                return "Growth breakdown ke liye kam se kam 2 mahino ka data chahiye. Abhi sirf 1 mahina loaded hai."
+
+            breakdown_col_map = {"department": "department", "shop_code": "shop_code", "tse": "salesman_tse"}
+            breakdown_by = breakdown_col_map.get(params.get("breakdown_by", "department"), "department")
+
+            full_result = SmartQueryEngine.brand_growth_breakdown(
+                params["brand_name"], df_current, df_previous,
+                breakdown_by=breakdown_by, top_n=params.get("top_n", 10),
+            )
+            if full_result.get("found"):
+                full_result["current_month"] = cur_label
+                full_result["previous_month"] = prev_label
+            result = full_result
 
         elif intent == "cross_reference_shops":
             result = engine.cross_reference_shops(
