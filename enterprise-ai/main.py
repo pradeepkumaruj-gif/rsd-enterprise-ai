@@ -160,6 +160,8 @@ QUERY_PARSER_SYSTEM = f"""Tu ek query parser hai RSD liquor sales dataset ke liy
 User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi):
 
 {{
+  "query_understood": true,
+  "clarification_needed": null,
   "intent": "generic",
   "metric": "sum",
   "group_by": ["dimension1", "dimension2"],
@@ -170,6 +172,19 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
   "count_dimension": null,
   "params": {{}}
 }}
+
+"query_understood" aur "clarification_needed" SABSE ZAROORI FIELDS HAIN -- inhe seriously lo:
+- "query_understood": true -- SIRF tab jab tumhe 100% confidence ho ki user kya poochh raha hai,
+  aur available dimensions/intents mein se sahi mapping ban sakti hai.
+- "query_understood": false -- agar sawaal ambiguous hai, incomplete hai, contradictory hai, ya
+  kisi aisi cheez ke baare mein hai jo available dimensions/intents mein fit nahi hoti, ya agar
+  do alag tarike se interpret ho sakta hai aur dono equally likely lagte hain. GUESS MAT KARO --
+  agar doubt hai, false maro aur "clarification_needed" mein SPECIFIC bata do ki kya unclear tha
+  aur user kya clarify kare (Hinglish mein, 1 line).
+- Jab "query_understood": false ho, baaki saare fields (intent, filters, etc.) ignore kar diye
+  jayenge -- unko kuch bhi default value de sakte ho, unka use nahi hoga.
+- Yeh galat guess se BEHTAR hai ki tum clearly bol do "clear nahi hai" -- ek galat-samjha sawaal
+  ka "sahi" number dena, galat sawaal poochne se zyada nuksaandeh hai.
 
 "intent" batata hai kaunsa engine chalana hai. Available intents:
 
@@ -643,13 +658,26 @@ def chat(request: ChatRequest):
 
     try:
         spec = parse_query_with_claude(request.message)
+    except Exception as e:
+        print(f"Query parse failed: {e}")
+        return {"reply": ("🤔 Sawaal samajh nahi paya. Try karo: 'Top TSE April mein', "
+                           "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")}
+
+    # Self-reported confidence check -- if Claude itself isn't sure what was
+    # asked, we stop right here instead of guessing an intent/filter and
+    # confidently returning a "correct-looking" answer to the WRONG question.
+    if not spec.get("query_understood", True):
+        clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
+        return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
+
+    try:
         intent = spec.get("intent", "generic")
         if intent == "generic":
             data = run_query(spec)
         else:
             data = run_special_intent(intent, spec.get("params") or {})
     except Exception as e:
-        print(f"Query parse/run failed: {e}")
+        print(f"Query run failed: {e}")
         data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
                 "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")
 
