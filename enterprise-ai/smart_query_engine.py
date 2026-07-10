@@ -584,12 +584,21 @@ class SmartQueryEngine:
     # ------------------------------------------------------------------
     @staticmethod
     def brand_growth_breakdown(brand_name: str, df_current, df_previous,
-                                breakdown_by: str = 'department', top_n: int = 10):
+                                breakdown_by: str = 'department', top_n: int = 10,
+                                extra_filters: dict = None):
         cur = df_current[df_current['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
         prev = df_previous[df_previous['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
 
+        # Optional additional scoping filter -- e.g. {"department": "DSIIDC"}
+        # to see the shop-wise breakdown WITHIN just that department, rather
+        # than across the whole brand.
+        if extra_filters:
+            for col, val in extra_filters.items():
+                cur = cur[cur[col].astype(str).str.upper() == str(val).upper()]
+                prev = prev[prev[col].astype(str).str.upper() == str(val).upper()]
+
         if cur.empty and prev.empty:
-            return {'found': False, 'message': f'Brand "{brand_name}" not found in either month.'}
+            return {'found': False, 'message': f'Brand "{brand_name}" not found in either month (with given filters).'}
 
         cur_group = cur.groupby(breakdown_by)['sale_qty_in_box'].sum()
         prev_group = prev.groupby(breakdown_by)['sale_qty_in_box'].sum()

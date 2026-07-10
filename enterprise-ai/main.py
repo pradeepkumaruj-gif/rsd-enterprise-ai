@@ -289,11 +289,17 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     (kaunsa department, shop, ya TSE sabse zyada contribute kar raha hai). NOTE: yeh sirf DATA
     breakdown deta hai (department/shop/TSE), business "reason" (marketing, pricing, competitor)
     NAHI de sakta -- woh data ismein hai hi nahi.
-    params: {{"brand_name": "...", "breakdown_by": "department", "top_n": 10}}
+    params: {{"brand_name": "...", "breakdown_by": "department", "top_n": 10, "filters": {{}}}}
     "breakdown_by" ek hi ho sakta hai: "department", "shop_code", ya "tse"
-    Trigger: "Royal Black ki growth kahan se aayi department wise", "kis shop se sabse zyada
-    growth aayi Dennis ki", "Royal Black sales growth reason" (-> yeh breakdown_by chahega,
-    default "department" use karo agar user specify na kare)
+    "filters" OPTIONAL hai -- jab user pehle ek dimension tak SCOPE karna chahta hai, phir uske
+    andar doosre dimension se breakdown chahta hai (jaise "DSIIDC ki top shops jaha push aaya" =
+    department=DSIIDC tak scope karo, phir shop_code se breakdown do). filters mein woh scoping
+    dimension+value daalo (generic dimensions list se), aur breakdown_by mein jis dimension ka
+    ranking chahiye woh daalo -- yeh dono ALAG hain, ek doosre ko replace nahi karte.
+    Trigger: "Royal Black ki growth kahan se aayi department wise" (-> breakdown_by: "department"),
+    "kis shop se sabse zyada growth aayi Dennis ki" (-> breakdown_by: "shop_code"), "Royal Black
+    DSIIDC ki top 20 shops jaha strong push aaya" (-> breakdown_by: "shop_code", filters:
+    {{"department": "DSIIDC"}})
 
 Agar sawaal upar ke kisi specific intent (2-15) se match nahi karta, "generic" use karo.
 
@@ -952,9 +958,18 @@ def run_special_intent(intent: str, params: dict):
             breakdown_col_map = {"department": "department", "shop_code": "shop_code", "tse": "salesman_tse"}
             breakdown_by = breakdown_col_map.get(params.get("breakdown_by", "department"), "department")
 
+            # Optional scoping filter -- e.g. "DSIIDC ki top shops" means
+            # scope to department=DSIIDC FIRST, then break down by shop.
+            extra_filters = {}
+            for dim, value in (params.get("filters") or {}).items():
+                col = DIMENSIONS.get(dim)
+                if col:
+                    extra_filters[col] = fuzzy_resolve_value(str(value), col)
+
             full_result = SmartQueryEngine.brand_growth_breakdown(
                 params["brand_name"], df_current, df_previous,
                 breakdown_by=breakdown_by, top_n=params.get("top_n", 10),
+                extra_filters=extra_filters or None,
             )
             if full_result.get("found"):
                 full_result["current_month"] = cur_label
