@@ -352,6 +352,31 @@ FIELD_DISPLAY_LABELS = {
     'top_department_qty': '📦 Top Department Qty',
     'mom_pct_change': '📈 MoM Growth %',
     'mom_change_qty': '📦 MoM Change (Qty)',
+    # mom_gainers_losers / brand_mom_check / general report fields
+    'current_month': '📅 Current Month',
+    'previous_month': '📅 Previous Month',
+    'top_gainers': '🚀 Top Gainers',
+    'top_losers': '📉 Top Losers',
+    'new_entries': '🆕 New Entries',
+    'dropped_brands': '⚰️ Dropped Brands',
+    'brand_name_as_per_company_data': '🥃 Brand',
+    'current_qty': '📦 Current Qty',
+    'previous_qty': '📦 Previous Qty',
+    'change_qty': '🔄 Change (Qty)',
+    'pct_change': '📊 % Change',
+    'current_month_qty': '📦 Current Month Qty',
+    'previous_month_qty': '📦 Previous Month Qty',
+    'is_new_entry': '🆕 New Entry?',
+    'is_dropped': '⚰️ Dropped?',
+    'rank': '🏆 Rank',
+    'shop_code': '🏪 Shop Code',
+    'shop_name_as_per_company_data': '🏪 Shop Name',
+    'department': '🏛️ Department',
+    'total_qty': '📦 Total Qty',
+    'market_share_pct': '📊 Market Share %',
+    'subset_qty': '📦 Qty',
+    'brand_qty': '📦 Brand Qty',
+    'brand_sale_qty': '📦 Brand Sale Qty',
 }
 # For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
 HIGHER_IS_BETTER_FIELDS = {
@@ -441,6 +466,31 @@ def render_comparison_table(records: list, entity_key: str, max_per_table: int =
     return "\n\n".join(tables)
 
 
+def _pretty_label(key: str) -> str:
+    return FIELD_DISPLAY_LABELS.get(key, "📌 " + str(key).replace("_", " ").title())
+
+
+# Eye-catching emojis for the top 3 rows of a 'pct_change' column -- gainers
+# (positive %) get rocket/fire emojis, losers (negative %) get warning/down
+# emojis. Only the first 3 rows get decorated (assumes the list is already
+# sorted by significance, which gainers/losers/rankings always are).
+TOP3_GAIN_EMOJIS = ['🔥🚀', '🚀', '✨']
+TOP3_LOSS_EMOJIS = ['🆘📉', '📉', '🔻']
+
+
+def _decorate_cell(column: str, value, row_index: int) -> str:
+    if column == 'pct_change':
+        try:
+            num = float(value)
+        except (ValueError, TypeError):
+            return str(value)
+        if row_index < 3 and num != 0:
+            emoji = TOP3_GAIN_EMOJIS[row_index] if num > 0 else TOP3_LOSS_EMOJIS[row_index]
+            return f"**{value}% {emoji}**"
+        return f"{value}%"
+    return str(value)
+
+
 def dicts_to_markdown_table(records: list) -> str:
     """Builds a markdown table directly from a list of dicts -- pure Python
     string formatting, zero LLM involvement. This is the ONLY place table
@@ -450,11 +500,12 @@ def dicts_to_markdown_table(records: list) -> str:
     if not records:
         return "_Koi data nahi mila is query ke liye._"
     columns = list(records[0].keys())
-    header = "| " + " | ".join(str(c).replace("_", " ").title() for c in columns) + " |"
+    header = "| " + " | ".join(_pretty_label(c) for c in columns) + " |"
     sep = "| " + " | ".join("---" for _ in columns) + " |"
     rows = []
-    for r in records:
-        rows.append("| " + " | ".join(str(r.get(c, "")) for c in columns) + " |")
+    for idx, r in enumerate(records):
+        cells = [_decorate_cell(c, r.get(c, ""), idx) for c in columns]
+        rows.append("| " + " | ".join(cells) + " |")
     return "\n".join([header, sep] + rows)
 
 
@@ -473,16 +524,16 @@ def render_data_deterministically(data) -> str:
             lines = [f"❌ {data.get('message', 'Data nahi mila.')}"]
             for key in ("similar_brands", "similar_companies"):
                 if data.get(key):
-                    lines.append("Kya aapka matlab in mein se tha: " + ", ".join(data[key]))
+                    lines.append("💡 Kya aapka matlab in mein se tha: " + ", ".join(data[key]))
             return "\n".join(lines)
 
         sections = []
         for key, value in data.items():
             if key == "found":
                 continue
-            label = key.replace("_", " ").title()
+            label = _pretty_label(key)
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                sections.append(f"**{label}:**\n\n{dicts_to_markdown_table(value)}")
+                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(value)}")
             elif isinstance(value, list):
                 sections.append(f"**{label}:** {', '.join(str(v) for v in value)}")
             else:
@@ -915,15 +966,18 @@ def run_special_intent(intent: str, params: dict):
             result = {
                 "current_month": cur_label,
                 "previous_month": prev_label,
-                "group_col": full_result["group_col"],
-                "min_base_used": full_result["min_base_used"],
             }
             if bd_seg_filter:
-                result["bd_segment_filter_applied"] = bd_seg_filter
+                # Shown ONCE here (not repeated as a column in every row --
+                # it's the same value on every row anyway when filtered).
+                result["bd_segment"] = bd_seg_filter
             for section in requested_sections:
                 json_key = section_key_map.get(section)
                 if json_key:
-                    result[json_key] = full_result[json_key]
+                    rows = full_result[json_key]
+                    if bd_seg_filter:
+                        rows = [{k: v for k, v in row.items() if k != "bd_segment"} for row in rows]
+                    result[json_key] = rows
 
         elif intent == "brand_ranking":
             result = engine.brand_ranking(params["brand_name"])
