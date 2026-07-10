@@ -43,6 +43,21 @@ class SmartQueryEngine:
         shop_sales = (sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
                       .sum().sort_values(ascending=False).head(top_shops))
 
+        # Department-wise breakdown: brand's qty AND its market share WITHIN
+        # each department (brand_qty_in_dept / total_dept_qty * 100) --
+        # combines "department wise sale" + "market share" in one place.
+        dept_qty = sub.groupby('department')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        dept_totals = df.groupby('department')['sale_qty_in_box'].sum()
+        department_breakdown = []
+        for dept, qty in dept_qty.items():
+            dept_total = dept_totals.get(dept, 0)
+            pct = float(round(qty / dept_total * 100, 2)) if dept_total else 0.0
+            department_breakdown.append({
+                'department': dept,
+                'brand_qty': int(qty),
+                'department_market_share_pct': pct,
+            })
+
         return {
             'found': True,
             'brand': brand_name,
@@ -53,6 +68,7 @@ class SmartQueryEngine:
             'brand_pct_within_bd_segment': float(round(brand_qty / bd_total * 100, 2)),
             'brand_pct_of_market': float(round(brand_qty / self.total_market * 100, 2)),
             'shops_selling_brand': shop_count,
+            'department_breakdown': department_breakdown,
             'top_shops': shop_sales.reset_index().to_dict('records')
         }
 
@@ -561,6 +577,90 @@ class SmartQueryEngine:
         }
 
     # ------------------------------------------------------------------
+    # q) GENERIC month-over-month check -- works for ANY dimension value
+    #    (department, shop_code, salesman_tse, etc.), not just brand/
+    #    company. E.g. "DCCWS department ka growth kitna hai" -- total
+    #    sale of that department (all brands combined), current vs
+    #    previous month.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def dimension_mom_check(column: str, value: str, df_current, df_previous):
+        cur = df_current[df_current[column].astype(str).str.upper() == str(value).upper()]
+        prev = df_previous[df_previous[column].astype(str).str.upper() == str(value).upper()]
+
+        if cur.empty and prev.empty:
+            return {'found': False, 'message': f'"{value}" not found in either month.'}
+
+        cur_qty = int(cur['sale_qty_in_box'].sum())
+        prev_qty = int(prev['sale_qty_in_box'].sum())
+        change_qty = cur_qty - prev_qty
+        pct_change = float(round(change_qty / prev_qty * 100, 2)) if prev_qty else None
+
+        return {
+            'found': True,
+            'value': value,
+            'current_month_qty': cur_qty,
+            'previous_month_qty': prev_qty,
+            'change_qty': change_qty,
+            'pct_change': pct_change,
+            'is_new_entry': bool(prev_qty == 0 and cur_qty > 0),
+            'is_dropped': bool(cur_qty == 0 and prev_qty > 0),
+        }
+
+    # ------------------------------------------------------------------
+    # r) GENERIC profile for any dimension value (department, shop, TSE) --
+    #    same idea as company_full_profile but works for any column.
+    # ------------------------------------------------------------------
+    def dimension_full_profile(self, column: str, value: str):
+        df = self.df
+        sub = df[df[column].astype(str).str.upper() == str(value).upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'"{value}" not found.'}
+
+        canonical_value = sub[column].iloc[0]
+        total_qty = int(sub['sale_qty_in_box'].sum())
+        market_share_pct = float(round(total_qty / self.total_market * 100, 2))
+
+        overall_rank_series = df.groupby(column)['sale_qty_in_box'].sum().sort_values(ascending=False)
+        overall_rank = int(overall_rank_series.index.get_loc(canonical_value) + 1)
+        total_count = len(overall_rank_series)
+
+        num_brands = int(sub['brand_name_as_per_company_data'].nunique())
+
+        brand_breakdown = sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum().sort_values(ascending=False)
+        top_brand = brand_breakdown.index[0]
+        top_brand_qty = int(brand_breakdown.iloc[0])
+        top_brand_pct = float(round(top_brand_qty / total_qty * 100, 2)) if total_qty else 0.0
+
+        return {
+            'found': True,
+            'value': canonical_value,
+            'total_sale_qty': total_qty,
+            'market_share_pct': market_share_pct,
+            'overall_rank': overall_rank,
+            'total_count': total_count,
+            'number_of_brands': num_brands,
+            'top_brand': top_brand,
+            'top_brand_qty': top_brand_qty,
+            'top_brand_pct': top_brand_pct,
+        }
+
+    # ------------------------------------------------------------------
+    # s) Compare 2-10 values of the SAME dimension (department vs
+    #    department, shop vs shop, TSE vs TSE) -- reuses
+    #    dimension_full_profile for each value.
+    # ------------------------------------------------------------------
+    def compare_dimension_values(self, column: str, values: list, max_values: int = 10):
+        if len(values) < 2:
+            return {'found': False, 'message': 'Please provide at least 2 values to compare.'}
+        if len(values) > max_values:
+            return {'found': False,
+                    'message': f'Maximum {max_values} values allowed. You gave {len(values)}.'}
+
+        details = {v: self.dimension_full_profile(column, v) for v in values}
+        return {'found': True, 'values_compared': len(values), 'details': details}
+
+    # ------------------------------------------------------------------
     # o) Compare 2-10 companies side by side (reuses company_full_profile's
     #    metrics for each company)
     # ------------------------------------------------------------------
@@ -623,6 +723,60 @@ class SmartQueryEngine:
             'breakdown_by': breakdown_by,
             'overall_change_qty': total_change,
             'breakdown': merged.head(top_n).to_dict('records'),
+        }
+
+    # ------------------------------------------------------------------
+    # t) Shop-strength analysis: find a brand's BOTTOM N shops (weakest,
+    #    where it sells least) OR TOP N shops (strongest), then for those
+    #    SAME shops, show either (a) the top-N other brands selling there,
+    #    or (b) a SPECIFIC competitor brand's performance there. Useful for
+    #    finding under-penetrated shops (weak) OR understanding the
+    #    competitive landscape in a brand's strongholds (top).
+    # ------------------------------------------------------------------
+    def brand_weak_shops_analysis(self, brand_name: str, bottom_n_shops: int = 10,
+                                   compare_brand: str = None, top_n_other_brands: int = 5,
+                                   find_bottom: bool = True):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        shop_sales = (sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
+                      .sum().sort_values(ascending=find_bottom).head(bottom_n_shops))
+
+        rows = []
+        for (shop_code, shop_name), brand_qty in shop_sales.items():
+            shop_df = df[df['shop_code'] == shop_code]
+
+            if compare_brand:
+                comp_sub = shop_df[shop_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
+                comp_qty = int(comp_sub['sale_qty_in_box'].sum())
+                rows.append({
+                    'shop_code': shop_code,
+                    'shop_name': shop_name,
+                    f'{brand_name}_qty': int(brand_qty),
+                    f'{compare_brand}_qty': comp_qty,
+                })
+            else:
+                top_here = (shop_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                            .sum().sort_values(ascending=False).head(top_n_other_brands))
+                for rank, (other_brand, other_qty) in enumerate(top_here.items(), start=1):
+                    rows.append({
+                        'shop_code': shop_code,
+                        'shop_name': shop_name,
+                        f'{brand_name}_qty_here': int(brand_qty),
+                        'rank_here': rank,
+                        'top_brand_here': other_brand,
+                        'top_brand_qty': int(other_qty),
+                    })
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'analysis_type': 'weakest_shops' if find_bottom else 'strongest_shops',
+            'n_shops': bottom_n_shops,
+            'compare_brand': compare_brand,
+            'rows': rows,
         }
 
 

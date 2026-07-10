@@ -167,6 +167,7 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
   "group_by": ["dimension1", "dimension2"],
   "filters": {{"dimension": "value to match", "dimension2": "value2"}},
   "share_filter": {{}},
+  "value_range": null,
   "top_n": 10,
   "sort_desc": true,
   "count_dimension": null,
@@ -301,9 +302,93 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
     DSIIDC ki top 20 shops jaha strong push aaya" (-> breakdown_by: "shop_code", filters:
     {{"department": "DSIIDC"}})
 
-Agar sawaal upar ke kisi specific intent (2-15) se match nahi karta, "generic" use karo.
+16. "dimension_mom_check" -- GENERIC month-over-month growth check for ANY dimension value --
+    department, shop, ya TSE ka OVERALL growth (saare brands milaake), na ki koi specific brand.
+    Yeh brand_mom_check se ALAG hai -- brand_mom_check ek brand ke liye hai, yeh koi bhi
+    department/shop/TSE ke liye hai.
+    params: {{"dimension": "department", "value": "DCCWS"}}
+    "dimension" ek hi ho sakta hai: "department", "shop_code", "party" (shop name), ya "tse"
+    "value" us dimension ki specific value hai (jaise "DCCWS", ya TSE ka naam, ya shop naam)
+    Trigger: "DCCWS department ka growth kitna hai", "DCCWS ka month over month kaisa raha"
+    (-> dimension: "department", value: "DCCWS" -- NO brand filter, overall department growth),
+    "TSE Raj Kumar ka growth kya hai", "is shop ka growth batao"
+
+17. "compare_dimension_values" -- 2 se 10 DEPARTMENTS, SHOPS, ya TSEs (SAME dimension) ko
+    side-by-side compare karo (bilkul compare_brands jaisa pattern) -- total sale, rank, brands
+    count, top brand, market share.
+    params: {{"dimension": "department", "values": ["DCCWS", "DSIIDC", ...]}}
+    "dimension" ek hi ho sakta hai: "department", "shop_code", "party" (shop name), ya "tse"
+    IMPORTANT: "values" list ka ORDER wahi rakho jis order mein user ne bola -- PEHLA value jo
+    user bole use ANCHOR maana jayega (agar 3+ values hain, anchor har table mein fixed rehta
+    hai, baaki 2-2 karke chunk hote hain) -- bilkul compare_brands jaisa.
+    Trigger: "DCCWS vs DSIIDC compare karo", "in departments ka comparison karo: DCCWS, DSIIDC,
+    DTTDC", "TSE Raj vs TSE Amit compare karo"
+
+18. "brand_weak_shops_analysis" -- ek brand ke BOTTOM/WEAKEST shops YA TOP/STRONGEST shops
+    dhoondo (jaha sabse kam YA sabse zyada bikta hai), phir unhi shops mein dekho konse brands
+    zyada chal rahe hain (ya ek SPECIFIC competitor brand ka wahan performance).
+    params: {{"brand_name": "...", "bottom_n_shops": 10, "compare_brand": null,
+    "top_n_other_brands": 5, "find_bottom": true}}
+    - "find_bottom": true -- jab user "lowest/weakest/kam bikne wale" shops pooche (default).
+    - "find_bottom": false -- jab user "top/best/highest/sabse zyada bikne wale" shops pooche.
+    - "compare_brand" OPTIONAL hai -- agar user ek specific doosra brand naam de ("Dennis ke
+      weak shops mein Royal Ace ka kya haal hai"), yahan daalo -- sirf uska data un shops mein
+      dikhega. Agar user generic "top brands wahan" pooche, "compare_brand" null rakho --
+      har shop ke top N brands dikhenge.
+    Trigger: "Dennis ke lowest 10 shops kaunse hain aur wahan top 5 brands kaunse chal rahe hain"
+    (-> find_bottom: true, compare_brand: null), "Dennis ke top selling shops mein kaunse aur
+    brands chal rahe hain" (-> find_bottom: false, compare_brand: null), "Dennis ke weak shops
+    mein Royal Ace ki sale kya hai" (-> find_bottom: true, compare_brand: "Royal Ace")
+
+Agar sawaal upar ke kisi specific intent (2-18) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
+
+DIMENSION NAME SYNONYMS -- user hamesha exact dimension naam nahi bolega, in synonyms ko
+pehchano aur sahi dimension pe map karo:
+- "party" (shop) ke liye: "shop", "dukaan", "theka" (Delhi mein liquor shop ke liye common slang),
+  "retailer", "outlet", "seller", "store", "branch", "counter", "vend" (excise/liquor licensing
+  term jo shop ke liye use hota hai), "L1/L2/L10" jaise license-type codes bhi shop ko refer karte hain,
+  "selling point", "point of sale", "pos"
+- "company" ke liye: "manufacturer", "distillery", "brand owner", "supplier", "producer", "maker",
+  "firm", "parent company", "manufacturing company" -- NOTE: "corporation"/"nigam" words yahan MAT
+  use karna, woh already "department" (DSIIDC/DTTDC jaise govt corporations) se mapped hain --
+  dono jagah use karne se confusion hoga.
+- "tse" ke liye: "salesman", "sales rep", "field rep", "agent", "salesperson", "beat officer",
+  "beat person" (FMCG mein route/territory ke liye "beat" bolte hain), "dsr" (distributor sales
+  rep), "order booker", "field officer", "sales executive", "sales officer"
+- "department" ke liye: "vibhaag", "nigam" (yeh values khud corporations hain: DSIIDC, DTTDC,
+  DCCWS, DSCSC, HCR), "corporation", "agency", "board", "govt corporation", "psu"
+- "shop_code" ke liye: "shop id", "shop number", "outlet code", "outlet id", "retailer code",
+  "license number", "license code" (excise licensing format jaisa dikhta hai, e.g. "01/2024/1491"),
+  "vend code", "vend number", "registration number"
+  DISTINCTION: agar user sirf "shop" bole bina "code/number/ID" qualifier ke, default "party"
+  (shop ka NAAM) use karo, "shop_code" nahi. Sirf "shop code/number/ID/license number" jaisa
+  explicit bole tabhi "shop_code" (unique identifier) use karo.
+- "liquor_type" ke liye: "drink type", "spirit type", "alcohol type"
+- "bd_segment" ke liye: "price segment", "price tier", "price band", "tier", "grade", "class",
+  "quality segment", "quality tier" -- IMPORTANT: bare "category" word ko bd_segment se mat map
+  karo, kyunki humare paas already ek ALAG "category" dimension hai (jiski sirf ek value hai
+  "IMFL", meaningfully useless hai). "category" word ko uske apne dimension pe hi rehne do,
+  confusion na banao.
+- "pack_size" ke liye: "bottle size", "pack", "size", "volume", "ml size", "pack type",
+  "quantity size", "pauwa" (Delhi/India slang for quarter/small bottle), "adha"/"half bottle"
+  (Hindi), "quarter" (colloquial for small bottle). Real values is dimension ke: "Nip, Quarter",
+  "Bottle", "Half", "Pint", "Miniature 90 ml", "Miniature 60 ml", "500 ML", "Imported 275 ml",
+  "Imported Bottle 1000 ml", "Imported Bottle 2000 ml"
+- "brand" ke liye: "product", "sku", "label", "trademark", "mark", "item ka naam" (par "item" akela
+  mat use karna pack_size ke confusion se bachne ke liye, pura phrase "item ka naam"/"brand name"
+  use karo tabhi map karo)
+
+AMBIGUOUS WORD WARNING -- "vendor" jaisa word GENUINELY ambiguous hai is business mein: kabhi
+iska matlab SHOP/RETAILER hota hai (jo product bechta hai), kabhi COMPANY/MANUFACTURER hota hai
+(jo product banata/supply karta hai) -- yeh dono bilkul alag dimensions hain ("party" vs
+"company"). Agar user "vendor" bole aur context se clear na ho konsa matlab hai, "query_understood":
+false karo aur poocho "Vendor se aapka matlab shop/retailer hai ya manufacturer/company?" -- yahan
+guess karna GALAT hoga kyunki dono results bilkul different honge.
+IMPORTANT DISTINCTION: "vend" (bina "or" ke, jaise "is vend ka data do") EK ALAG word hai --
+yeh Indian liquor excise licensing ki official terminology hai, aur HAMESHA "party" (shop) ko hi
+refer karta hai, koi ambiguity nahi hai. Sirf "vendor" (poora word, "or" ke saath) ambiguous hai.
 
 IMPORTANT -- "bd_segment" dimension ke real values yeh hain (inhe EXACT ek hi value maano, todo mat):
 "Semi Pre Whisky", "Semi Pre Vodka", "Regular Whisky", "Premium Whisky", "Super Pre Whisky",
@@ -327,13 +412,24 @@ isi ko use karo, kabhi "segment" naam ka alag dimension mat banao.
 "Imported Bottle 2000 ml". Jab user "bottle wise" ya "quarter wise" ya "nip wise" sale pooche,
 yeh dimension use karo.
 
-"metric" teen types ka ho sakta hai:
+"metric" chaar types ka ho sakta hai:
 - "sum" (default) -- sale_qty_in_box ka total. Yeh QUANTITY hai (boxes), currency NAHI hai.
+  METRIC SYNONYMS: user "sale", "sales", "qty", "quantity", "volume", "units", "boxes",
+  "off-take" (FMCG industry term), "lifting" (retailer ne kitna utha), "movement", "numbers"
+  jaisa bhi bole -- sab isi "sum" (sale_qty_in_box) metric ko refer karte hain.
+  ⚠️ AMBIGUOUS: "turnover", "business", "revenue" jaise words kabhi MONEY/CURRENCY imply karte
+  hain -- humare paas revenue/currency data NAHI hai (sirf quantity hai). Agar user in words
+  se currency/rupees maang raha lage, "query_understood": false karo aur clarify karo ki
+  "sirf quantity (boxes) available hai, revenue/rupees nahi -- yehi chahiye kya?"
 - "count_distinct" -- jab user "kitne total X hai" jaisa pooche (jaise "total kitne shop code hai", "kitne alag brand hain"). Is case mein "count_dimension" field mein woh dimension daalo jiska unique count chahiye, aur group_by/filters normal rahenge.
 - "market_share" -- jab user kisi specific brand/product/company ka "market share" ya "% hissa" total sale mein poochta hai (jaise "Dennis ka market share kya hai har shop mein"). Is case mein:
   - "filters" mein overall context filters daalo (jaise month)
   - "share_filter" mein woh specific dimension+value daalo jiska share nikalna hai (jaise {{"brand": "Dennis"}})
   - "group_by" mein woh dimensions daalo jiske hisaab se share dikhana hai (jaise shop-wise ya department-wise share ke liye ["party", "department"]; agar sirf ek overall number chahiye, group_by empty [] rakho)
+- "average" -- jab user "average/mean sale per X" jaisa pooche (jaise "Dennis ka average sale per shop", "brand wise average sale per shop"). Formula: Total Qty / Unique count of X. Is case mein:
+  - "avg_per_dimension" mein woh dimension daalo jiske "per" average nikalna hai (jaise "per shop" -> "party", "per TSE" -> "tse")
+  - "filters" mein context filters daalo (jaise brand)
+  - "group_by" -- agar ek hi overall average chahiye, empty [] rakho. Agar "brand wise average" jaisa breakdown chahiye, group_by mein woh dimension daalo (jaise ["brand"])
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
@@ -342,6 +438,18 @@ Rules:
 - top_n default 10, agar "top 5" jaisa kuch bola hai to wahi number daalo
 - Agar sawaal total/overall pucha hai bina kisi grouping ke, group_by ko empty list [] rakho
 - "kitne total/alag/unique X hai" jaise sawaalon ke liye metric="count_distinct" use karo, group_by ko empty [] rakho
+- "value_range" -- jab user kisi NUMBER RANGE ke andar wale items poochta hai (jaise "500-1000
+  boxes wale brands", "1000 se zyada bechne wale shops", "100 se kam sale wale TSE"). Yeh filter
+  hai TOTAL QUANTITY pe (calculation ke BAAD), na ki kisi dimension value pe. Format:
+  {{"min": 500, "max": 1000}} (dono ho sakte hain, ya sirf ek -- "1000 se zyada" ->
+  {{"min": 1000, "max": null}}, "100 se kam" -> {{"min": null, "max": 100}}). group_by mein woh
+  dimension daalo jiske range check karni hai (jaise ["brand"]). Jab value_range use ho, top_n
+  ko 50 rakho (jab tak user khud koi number na de) -- taaki range ke SAARE matching items dikhein,
+  sirf top 10 nahi.
+- "sort_desc" IMPORTANT: default true hai (sabse zyada/top/highest). Agar user "sabse KAM", "kam se
+  kam", "lowest", "minimum", "sabse chhota", "worst" jaisa kuch bole, "sort_desc": false karo
+  (taaki lowest values sabse upar aayen). Jaise "Dennis ki sabse kam sale kaha hai" ->
+  filters:{{"brand":"Dennis"}}, group_by:["party"], sort_desc:false, top_n:1 (ya jitna user maange)
 """
 
 
@@ -353,6 +461,9 @@ FIELD_DISPLAY_LABELS = {
     'pct_within_bd_segment': '📊 % Within Segment',
     'pct_of_market': '🌍 % of Market',
     'shops_selling': '🏪 Shops Selling',
+    'shops_selling_brand': '🏪 Shops Selling Brand',
+    'department_breakdown': '🏛️ Department Breakdown',
+    'department_market_share_pct': '🌍 Department Market Share %',
     'overall_rank': '🏆 Overall Rank',
     'total_sale_qty': '📦 Total Sale Qty (Boxes)',
     'overall_market_share_pct': '🌍 Market Share %',
@@ -398,11 +509,16 @@ FIELD_DISPLAY_LABELS = {
     'breakdown': '📊 Growth Breakdown',
     'salesman_tse': '👤 TSE',
     'pct_of_total_change': '📊 % of Total Change',
+    'avg_qty': '📈 Average Qty',
+    'total_count': '🔢 Total Count',
+    'top_brand_pct': '📊 Top Brand % of Total',
+    'value': '📊 Value',
+    'item': '📌 Item',
 }
 # For these fields, a HIGHER number is the "winner" (gets 🥇 highlighted)
 HIGHER_IS_BETTER_FIELDS = {
     'sale_qty', 'pct_within_bd_segment', 'pct_of_market', 'shops_selling',
-    'total_sale_qty', 'overall_market_share_pct', 'number_of_brands',
+    'total_sale_qty', 'overall_market_share_pct', 'market_share_pct', 'number_of_brands',
     'number_of_bd_segments', 'shops_covered', 'avg_sale_per_shop', 'mom_pct_change',
 }
 # For these fields, a LOWER number is the "winner" (rank #1 beats rank #26)
@@ -433,7 +549,7 @@ def _build_comparison_row(field: str, chunk: list) -> str:
 
 
 def _build_comparison_block(chunk: list, entity_key: str, fields: list, table_num: int, total_tables: int) -> str:
-    icon_and_label = {"brand": "🥃 Brand", "company": "🏢 Company"}.get(entity_key, "📋 Item")
+    icon_and_label = {"brand": "🥃 Brand", "company": "🏢 Company", "value": "📊 Item"}.get(entity_key, "📋 Item")
     title = f"### {icon_and_label} Comparison"
     if total_tables > 1:
         title += f" — Table {table_num}/{total_tables}"
@@ -555,6 +671,12 @@ def render_data_deterministically(data) -> str:
             label = _pretty_label(key)
             if isinstance(value, list) and value and isinstance(value[0], dict):
                 sections.append(f"**{label}**\n\n{dicts_to_markdown_table(value)}")
+            elif isinstance(value, dict) and value:
+                # A plain {name: number} dict (e.g. market_share's 'ranking'
+                # field) -- convert to proper table rows instead of dumping
+                # it as raw Python dict text like "{'X': 18.75, 'Y': 10.38}".
+                records = [{"item": k, "value": v} for k, v in value.items()]
+                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(records)}")
             elif isinstance(value, list):
                 sections.append(f"**{label}:** {', '.join(str(v) for v in value)}")
             else:
@@ -601,6 +723,13 @@ def resolve_month_reference(value: str) -> str:
        (below the 0.6 cutoff due to length difference), so we normalize
        full month names to their 3-letter form first ("April" -> "Apr"),
        which then matches via plain substring containment.
+    3. AMBIGUITY CHECK -- if the user gave NO year at all and that bare
+       month name actually matches MULTIPLE different years in the real
+       data (e.g. "April" when both Apr-26 and Apr-27 exist), this does
+       NOT guess. It returns a sentinel string that run_query recognizes
+       and turns into a clarification question -- silently picking a year
+       would be exactly the kind of confident-but-wrong answer that broke
+       trust before.
     """
     v = value.strip().lower()
 
@@ -611,11 +740,24 @@ def resolve_month_reference(value: str) -> str:
         _, _, _, prev_label = get_current_and_previous_month_df()
         return prev_label or value
 
+    normalized_value = value
     for full_name, abbr in MONTH_NAME_TO_ABBR.items():
         if v == full_name or v.startswith(full_name + ' '):
-            return value.lower().replace(full_name, abbr)
+            normalized_value = value.lower().replace(full_name, abbr)
+            break
 
-    return value
+    # If the user gave no digits at all (no year mentioned), check whether
+    # this bare month name actually spans multiple years in the real data.
+    if not any(ch.isdigit() for ch in value) and not df.empty:
+        month_prefix = normalized_value.strip().lower()[:3]
+        matching_months = sorted(
+            m for m in df[COL_MONTH].astype(str).unique()
+            if str(m).lower().startswith(month_prefix)
+        )
+        if len(matching_months) > 1:
+            return "__AMBIGUOUS_MONTH__:" + ",".join(matching_months)
+
+    return normalized_value
 
 
 def run_query(spec: dict):
@@ -630,7 +772,12 @@ def run_query(spec: dict):
         col = DIMENSIONS.get(dim)
         if col and col in filtered.columns:
             if dim == "month":
+                original_value = value
                 value = resolve_month_reference(str(value))
+                if isinstance(value, str) and value.startswith("__AMBIGUOUS_MONTH__:"):
+                    options = value.split(":", 1)[1]
+                    return (f"🤔 '{original_value}' ke liye {len(options.split(','))} saal ka data mila "
+                            f"({options}) -- konsa chahiye? Saal ke saath batao, jaise 'April 2026'.")
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
@@ -684,6 +831,31 @@ def run_query(spec: dict):
         combined = combined.head(top_n)
         return combined.reset_index().to_dict('records')
 
+    # Average metric: Total Qty / Unique count of some dimension (e.g.
+    # "average sale per shop" = total qty / distinct shop count)
+    if spec.get("metric") == "average":
+        avg_dim = spec.get("avg_per_dimension")
+        avg_col = DIMENSIONS.get(avg_dim)
+        if not avg_col:
+            return "Average nikalne ke liye valid 'per' dimension chahiye (jaise shop, tse, department)."
+
+        group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
+        top_n = spec.get("top_n") or 10
+        sort_desc = spec.get("sort_desc", True)
+
+        if not group_by:
+            total = filtered[COL_QTY].sum()
+            count = filtered[avg_col].nunique()
+            avg = round(total / count, 2) if count else 0
+            return f"Average Sale per {avg_dim.title()}: {avg} (Total Qty: {total} / {count} unique {avg_dim})"
+
+        grouped = filtered.groupby(group_by)
+        avg_series = grouped.apply(
+            lambda g: round(g[COL_QTY].sum() / g[avg_col].nunique(), 2) if g[avg_col].nunique() else 0
+        )
+        avg_series = avg_series.rename('avg_qty').sort_values(ascending=not sort_desc).head(top_n)
+        return avg_series.reset_index().to_dict('records')
+
     group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
     top_n = spec.get("top_n") or 10
     sort_desc = spec.get("sort_desc", True)
@@ -708,6 +880,19 @@ def run_query(spec: dict):
         return pivot.reset_index().to_dict('records')
 
     result = filtered.groupby(group_by)[COL_QTY].sum()
+
+    # value_range: filter the AGGREGATED totals (like SQL's HAVING clause) --
+    # e.g. "500-1000 boxes wale brands" keeps only groups whose total falls
+    # in that range, applied AFTER summing, before sorting/limiting.
+    value_range = spec.get("value_range")
+    if value_range:
+        if value_range.get("min") is not None:
+            result = result[result >= value_range["min"]]
+        if value_range.get("max") is not None:
+            result = result[result <= value_range["max"]]
+        if result.empty:
+            return f"Is range ({value_range.get('min', '-')} se {value_range.get('max', '-')}) mein koi data nahi mila."
+
     result = result.sort_values(ascending=not sort_desc)
     result = result.head(top_n)
     result = result.rename('total_qty')
@@ -950,6 +1135,60 @@ def run_special_intent(intent: str, params: dict):
                 # 2-per-table alongside it.
                 return render_anchor_comparison_table(complete_table, entity_key="company")
 
+        elif intent == "compare_dimension_values":
+            dim_col = DIMENSIONS.get(params.get("dimension"))
+            if not dim_col:
+                return "Valid dimension chahiye (department, shop_code, party, ya tse)."
+            resolved_values = [fuzzy_resolve_value(str(v), dim_col) for v in params["values"]]
+            engine_result = engine.compare_dimension_values(dim_col, resolved_values)
+            if not engine_result.get("found") and "details" not in engine_result:
+                result = engine_result
+            else:
+                field_names = []
+                for detail in engine_result["details"].values():
+                    if detail.get("found"):
+                        field_names = [k for k in detail.keys() if k != "found"]
+                        break
+
+                complete_table = []
+                for value_input in resolved_values:
+                    detail = engine_result["details"].get(value_input, {})
+                    if not detail.get("found"):
+                        row = {"value": value_input}
+                        for f in field_names:
+                            row[f] = "❌ Not Found"
+                        complete_table.append(row)
+                        continue
+                    row = {"value": value_input}
+                    for k, v in detail.items():
+                        if k == "found":
+                            continue
+                        row[k] = v
+                    complete_table.append(row)
+
+                # Same anchor pattern: FIRST value mentioned stays fixed
+                # across every table, rest chunked 2-per-table.
+                return render_anchor_comparison_table(complete_table, entity_key="value")
+
+        elif intent == "brand_weak_shops_analysis":
+            compare_brand = params.get("compare_brand")
+            if compare_brand:
+                compare_brand = resolve_brand_name(compare_brand)
+            engine_result = engine.brand_weak_shops_analysis(
+                params["brand_name"],
+                bottom_n_shops=params.get("bottom_n_shops", 10),
+                compare_brand=compare_brand,
+                top_n_other_brands=params.get("top_n_other_brands", 5),
+                find_bottom=params.get("find_bottom", True),
+            )
+            if engine_result.get("found"):
+                # 'rows' is already a flat list of dicts -- return it
+                # directly (a list), so the normal /chat pipeline renders
+                # it as a table and adds ONE insight line, same as every
+                # other intent (no need to duplicate that logic here).
+                return engine_result["rows"]
+            result = engine_result
+
         elif intent == "brand_growth_breakdown":
             df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
             if df_current is None:
@@ -971,6 +1210,22 @@ def run_special_intent(intent: str, params: dict):
                 breakdown_by=breakdown_by, top_n=params.get("top_n", 10),
                 extra_filters=extra_filters or None,
             )
+            if full_result.get("found"):
+                full_result["current_month"] = cur_label
+                full_result["previous_month"] = prev_label
+            result = full_result
+
+        elif intent == "dimension_mom_check":
+            df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+            if df_current is None:
+                return "MoM comparison ke liye kam se kam 2 mahino ka data chahiye. Abhi sirf 1 mahina loaded hai."
+
+            dim_col = DIMENSIONS.get(params.get("dimension"))
+            if not dim_col:
+                return "Valid dimension chahiye (department, shop_code, party, ya tse)."
+            resolved_value = fuzzy_resolve_value(str(params.get("value", "")), dim_col)
+
+            full_result = SmartQueryEngine.dimension_mom_check(dim_col, resolved_value, df_current, df_previous)
             if full_result.get("found"):
                 full_result["current_month"] = cur_label
                 full_result["previous_month"] = prev_label
