@@ -154,31 +154,49 @@ export default function App() {
   // export them as CSV, Excel, or PDF.
   const stripMd = (s) => s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').trim()
 
+  // Lightweight, robust check used just to decide whether to SHOW the
+  // Download button -- a real markdown table always has a separator row
+  // like "| --- | --- |", which is a very distinctive, hard-to-miss pattern.
+  const hasTable = (text) => !!text && /\|[\s:]*-{2,}[\s:]*\|/.test(text)
+
   const parseMarkdownTables = (text) => {
-    if (!text) return []
-    const lines = text.split('\n')
-    const tables = []
-    let tableLines = []
-    let inTable = false
-    const flush = () => {
-      const rows = tableLines.filter(l => !l.match(/^\|[\s-|]+\|$/) && !l.includes('---'))
-      if (rows.length) {
-        const parsed = rows.map(r => r.split('|').filter(c => c.trim()).map(stripMd))
-        tables.push({ headers: parsed[0], rows: parsed.slice(1) })
+    try {
+      if (!text) return []
+      // Normalize line endings (in case of \r\n) and split.
+      const lines = text.replace(/\r\n/g, '\n').split('\n')
+      const tables = []
+      let block = []
+      const flushBlock = () => {
+        if (!block.length) return
+        // Drop separator rows like "| --- | --- |".
+        const dataLines = block.filter(l => !/^\|[\s:|-]+\|$/.test(l.trim()))
+        if (dataLines.length >= 1) {
+          const parsedRows = dataLines.map(l => {
+            const trimmed = l.trim()
+            // Strip one leading and one trailing '|' if present, then split
+            // on '|' -- more predictable than filtering truthy cells, which
+            // could misalign columns if a cell were ever legitimately blank.
+            const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '')
+            return inner.split('|').map(stripMd)
+          })
+          tables.push({ headers: parsedRows[0], rows: parsedRows.slice(1) })
+        }
+        block = []
       }
-      tableLines = []
-    }
-    for (let line of lines) {
-      if (line.trim().startsWith('|') && line.includes('|')) {
-        inTable = true
-        tableLines.push(line)
-      } else if (inTable) {
-        flush()
-        inTable = false
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        if (line.startsWith('|') && line.endsWith('|') && line.length > 1) {
+          block.push(line)
+        } else if (block.length) {
+          flushBlock()
+        }
       }
+      flushBlock()
+      return tables
+    } catch (err) {
+      console.error('parseMarkdownTables failed:', err)
+      return []
     }
-    if (tableLines.length) flush()
-    return tables
   }
 
   const exportToCSV = (tables, filename) => {
@@ -470,7 +488,7 @@ export default function App() {
                           {copiedId === m.id ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
                         </button>
 
-                        {parseMarkdownTables(m.content).length > 0 && (
+                        {hasTable(m.content) && (
                           <>
                             <button onClick={() => setDownloadMenuId(downloadMenuId === m.id ? null : m.id)} style={{
                               background: "transparent", border: "none", cursor: "pointer",
