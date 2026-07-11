@@ -171,9 +171,22 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
   "top_n": 10,
   "sort_desc": true,
   "count_dimension": null,
+  "month_filter": null,
   "params": {{}}
 }}
 
+"month_filter" -- UNIVERSAL field jo KISI BHI intent (generic ya specialized) ke saath kaam
+karta hai -- kisi bhi specialized function (brand_report, segment_top_brands_with_shop_and_compare,
+compare_brands, dimension_breakdown_report, etc.) ko ek SPECIFIC month ya month-RANGE tak scope
+karta hai (default sabhi loaded months combined use karte hain agar yeh na diya jaye).
+Format: {{"start": "Apr-26", "end": "May-26"}} -- agar sirf EK month chahiye, "end" ko "start"
+jaisa hi rakho (ya omit kar do, automatically same maan liya jayega).
+Trigger: "April mein Dennis ka poora profile do" (-> month_filter: {{"start":"Apr-26","end":"Apr-26"}}),
+"April se May tak Semi Pre Whisky ke top brands" (-> month_filter: {{"start":"Apr-26","end":"May-26"}}),
+"is mahine ke liye compare karo" (-> current month use karo)
+NOTE: MoM/growth-type intents (mom_gainers_losers, brand_mom_check, dimension_mom_check,
+brand_growth_breakdown, compound_ranking) is field ko IGNORE karte hain -- unka apna month-pair
+logic already hai (current vs previous automatically), unke saath month_filter mat bhejo.
 "query_understood" aur "clarification_needed" SABSE ZAROORI FIELDS HAIN -- inhe seriously lo:
 - "query_understood": true -- SIRF tab jab tumhe 100% confidence ho ki user kya poochh raha hai,
   aur available dimensions/intents mein se sahi mapping ban sakti hai.
@@ -626,12 +639,18 @@ FIELD_DISPLAY_LABELS = {
     'brand_total_qty_in_segment': '📦 Brand Total Qty (Segment)',
     'top_shop_name': '🏪 Top Shop',
     'brand_qty_at_shop': '📦 Brand Qty at Shop',
-    'brand_pct_of_segment_at_shop': '🌍 Brand % of Segment at Shop',
+    'brand_segment_pct_at_shop': '🌍 Brand Segment % at Shop',
+    'brand_total_market_share': '🌍 Brand Total Market Share',
     'segment_total_sale': '📦 Segment Total Sale',
+    'overall_total_market': '📦 Total Sale (Overall Market)',
     'segment_pct_of_overall_market': '🌍 Segment % of Overall Market',
     'compare_brand_overall_qty': '📦 Compare Brand Overall Qty',
     'compare_brand_overall_pct_of_market': '🌍 Compare Brand Overall Market Share %',
     'compare_brand_overall_pct_of_segment': '📊 Compare Brand Overall % of Segment',
+    'compare_brand_qty_at_shop': '📦 Compare Brand Qty at Shop',
+    'segment_pct_at_shop': '🌍 Segment % at Shop',
+    'total_market_share': '🌍 Total Market Share',
+    'top_brands': '📊 Top Brands',
     'universe_dimension': '🌍 Universe Dimension',
     'total_universe_count': '🔢 Total Universe Count',
     'present_count': '✅ Present Count',
@@ -917,8 +936,8 @@ def resolve_month_reference(value: str) -> str:
     return normalized_value
 
 
-def run_query(spec: dict):
-    filtered = df
+def run_query(spec: dict, working_df=None):
+    filtered = working_df if working_df is not None else df
 
     # Apply filters -- each value is first fuzzy-resolved to the closest
     # REAL value in that column (exact -> substring -> typo-tolerant match),
@@ -1185,10 +1204,10 @@ def resolve_company_name(partial_name: str) -> str:
     return fuzzy_resolve_value(partial_name, COL_COMPANY)
 
 
-def run_special_intent(intent: str, params: dict):
+def run_special_intent(intent: str, params: dict, working_df=None):
     """Routes a parsed intent to the matching SmartQueryEngine method.
     Returns a JSON string of the result (or an error message string)."""
-    engine = SmartQueryEngine(df)  # cheap wrapper around current df, rebuilt fresh each call
+    engine = SmartQueryEngine(working_df if working_df is not None else df)  # rebuilt fresh each call
 
     # Auto-resolve partial/loosely-worded names to their exact canonical
     # database values -- every intent below requires EXACT (case-insensitive)
@@ -1561,6 +1580,35 @@ def run_special_intent(intent: str, params: dict):
         return f"Query run karne mein error aayi: {e}"
 
 
+def get_month_scoped_df(month_filter: dict):
+    """Returns a df scoped to a single month or a month RANGE (e.g. 'Apr-26
+    to Jun-26'), used to make specialized functions (brand_report,
+    segment_top_brands_with_shop_and_compare, etc.) respect a custom period
+    instead of always using ALL loaded months combined. Returns None if no
+    valid scoping was requested (caller should then use the full df)."""
+    if not month_filter:
+        return None
+    start = month_filter.get("start")
+    end = month_filter.get("end") or start
+    if not start:
+        return None
+
+    start_resolved = resolve_month_reference(str(start))
+    end_resolved = resolve_month_reference(str(end))
+    if not isinstance(start_resolved, str) or not isinstance(end_resolved, str):
+        return None
+    if start_resolved.startswith("__AMBIGUOUS_MONTH__:") or end_resolved.startswith("__AMBIGUOUS_MONTH__:"):
+        return None  # let the normal filter path in run_query surface the ambiguity message instead
+
+    month_dates = pd.to_datetime(df[COL_MONTH], format='%b-%y', errors='coerce')
+    start_date = pd.to_datetime(start_resolved, format='%b-%y', errors='coerce')
+    end_date = pd.to_datetime(end_resolved, format='%b-%y', errors='coerce')
+    if pd.isnull(start_date) or pd.isnull(end_date):
+        return None
+
+    return df[(month_dates >= start_date) & (month_dates <= end_date)]
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     if data_loading_status == "loading":
@@ -1582,12 +1630,19 @@ def chat(request: ChatRequest):
         clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
         return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
 
+    # Optional custom period scoping (single month or a month RANGE) --
+    # applies to specialized functions (brand_report, comparisons, segment
+    # breakdowns, etc.) that otherwise always compute across ALL loaded
+    # months combined. MoM-type intents ignore this (they need exactly
+    # 2 specific months by design, handled separately).
+    working_df = get_month_scoped_df(spec.get("month_filter"))
+
     try:
         intent = spec.get("intent", "generic")
         if intent == "generic":
-            data = run_query(spec)
+            data = run_query(spec, working_df=working_df)
         else:
-            data = run_special_intent(intent, spec.get("params") or {})
+            data = run_special_intent(intent, spec.get("params") or {}, working_df=working_df)
     except Exception as e:
         print(f"Query run failed: {e}")
         data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
