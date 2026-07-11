@@ -1624,6 +1624,33 @@ def get_month_scoped_df(month_filter: dict):
     return df[(month_dates >= start_date) & (month_dates <= end_date)]
 
 
+def format_period_label(month_filter: dict) -> str:
+    """Turns a month_filter into a human-readable calendar date range, e.g.
+    '01 Apr 26 - 30 Apr 26' for a single month, or '01 Apr 26 - 31 May 26'
+    for a range -- shown above the table so it's clear WHICH period the
+    numbers below actually cover."""
+    start = month_filter.get("start")
+    end = month_filter.get("end") or start
+    start_resolved = resolve_month_reference(str(start))
+    end_resolved = resolve_month_reference(str(end))
+    if not isinstance(start_resolved, str) or not isinstance(end_resolved, str):
+        return ""
+    try:
+        # NOTE: pd.Period('Apr-26', freq='M') misparses "26" (doesn't treat
+        # it as a 2-digit year), so use pd.to_datetime with an EXPLICIT
+        # format instead, then find that month's actual last day.
+        start_date = pd.to_datetime(start_resolved, format='%b-%y', errors='coerce')
+        end_date = pd.to_datetime(end_resolved, format='%b-%y', errors='coerce')
+    except (ValueError, TypeError):
+        return ""
+    if pd.isnull(start_date) or pd.isnull(end_date):
+        return ""
+    end_of_month = end_date + pd.offsets.MonthEnd(0)
+    start_str = start_date.strftime('%d %b %y')
+    end_str = end_of_month.strftime('%d %b %y')
+    return f"{start_str} - {end_str}"
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     if data_loading_status == "loading":
@@ -1671,6 +1698,14 @@ def chat(request: ChatRequest):
     # 31,536/20,081 -- the calculation was correct, but the presentation
     # layer had silently changed the numbers while "formatting" them).
     deterministic_text = render_data_deterministically(data)
+
+    # If a custom period (month or month-range) was applied, show it
+    # clearly ABOVE the result -- otherwise it's not obvious to the user
+    # WHICH period the numbers below actually cover.
+    if working_df is not None and spec.get("month_filter"):
+        period_label = format_period_label(spec["month_filter"])
+        if period_label:
+            deterministic_text = f"📅 **Period:** {period_label}\n\n{deterministic_text}"
 
     # Claude's ONLY job now is a short 1-2 line insight/comment -- it is
     # explicitly told not to repeat any numbers, since those are already
