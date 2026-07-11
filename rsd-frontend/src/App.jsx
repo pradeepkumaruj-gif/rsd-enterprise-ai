@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from "react"
-import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X } from "lucide-react"
+import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X, Download, FileSpreadsheet, FileText, FileDown } from "lucide-react"
+import * as XLSX from "xlsx"
+import jsPDF from "jspdf"
+import "jspdf-autotable"
 
 let chatIdCounter = 1
 
@@ -15,6 +18,7 @@ export default function App() {
   const [streamingText, setStreamingText] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
+  const [downloadMenuId, setDownloadMenuId] = useState(null)
   const recognitionRef = useRef(null)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
@@ -106,22 +110,112 @@ export default function App() {
   const renderTable = (lines) => {
     const rows = lines.filter(l => !l.match(/^\|[\s-|]+\|$/) && !l.includes('---'))
     if (!rows.length) return ''
-    const bdr = isDark ? '#3a3a3a' : '#e5e5e5'
-    const hBg = isDark ? '#252525' : '#fafafa'
+    const bdr = isDark ? '#333333' : '#e8e8e8'
+    const bdrHead = isDark ? '#555555' : '#333333'
     const txt = isDark ? '#ececec' : '#1a1a1a'
-    let html = `<div style="overflow-x:auto;margin:12px 0;border-radius:8px;border:1px solid ${bdr}"><table style="border-collapse:collapse;width:100%;font-size:14px">`
-    rows.forEach((row, i) => {
-      const cells = row.split('|').filter(c => c.trim())
-      const isH = i === 0
-      html += `<tr style="background:${isH ? hBg : 'transparent'}">`
-      cells.forEach(cell => {
-        const clean = cell.trim().replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        const tag = isH ? 'th' : 'td'
-        html += `<${tag} style="padding:10px 16px;border-bottom:1px solid ${bdr};color:${txt};text-align:left;${isH ? 'font-weight:600;font-size:13px' : 'font-size:14px'}">${clean}</${tag}>`
+
+    const parsedRows = rows.map(row => row.split('|').filter(c => c.trim()).map(c => c.trim()))
+    const headerCells = parsedRows[0]
+    const bodyRows = parsedRows.slice(1)
+
+    // A column is treated as "numeric" (and right-aligned, like a spreadsheet)
+    // if EVERY body cell in it looks like a number/%/currency value.
+    const isNumericCell = (v) => {
+      const s = (v || '').replace(/\*\*/g, '').trim()
+      return s === '' || s === '-' || /^[₹$]?-?[\d,]+\.?\d*%?$/.test(s)
+    }
+    const numericCols = headerCells.map((_, colIdx) =>
+      bodyRows.length > 0 && bodyRows.every(r => isNumericCell(r[colIdx]))
+    )
+
+    let html = `<div style="overflow-x:auto;margin:14px 0"><table style="border-collapse:collapse;width:100%;font-size:14px">`
+    html += '<thead><tr>'
+    headerCells.forEach((cell, colIdx) => {
+      const clean = cell.replace(/\*\*(.*?)\*\*/g, '$1')
+      const align = numericCols[colIdx] ? 'right' : 'left'
+      html += `<th style="padding:8px 16px;border-bottom:2px solid ${bdrHead};color:${txt};text-align:${align};font-weight:600;font-size:12.5px;white-space:nowrap">${clean}</th>`
+    })
+    html += '</tr></thead><tbody>'
+    bodyRows.forEach((cells, i) => {
+      const isLast = i === bodyRows.length - 1
+      html += '<tr>'
+      cells.forEach((cell, colIdx) => {
+        const clean = cell.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        const align = numericCols[colIdx] ? 'right' : 'left'
+        html += `<td style="padding:12px 16px;border-bottom:${isLast ? 'none' : `1px solid ${bdr}`};color:${txt};text-align:${align};font-size:14px;vertical-align:top">${clean}</td>`
       })
       html += '</tr>'
     })
-    return html + '</table></div>'
+    return html + '</tbody></table></div>'
+  }
+
+  // ---- Download feature: parse markdown tables out of a message's raw
+  // text into plain {headers, rows} objects (no HTML/markdown), then
+  // export them as CSV, Excel, or PDF.
+  const stripMd = (s) => s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').trim()
+
+  const parseMarkdownTables = (text) => {
+    if (!text) return []
+    const lines = text.split('\n')
+    const tables = []
+    let tableLines = []
+    let inTable = false
+    const flush = () => {
+      const rows = tableLines.filter(l => !l.match(/^\|[\s-|]+\|$/) && !l.includes('---'))
+      if (rows.length) {
+        const parsed = rows.map(r => r.split('|').filter(c => c.trim()).map(stripMd))
+        tables.push({ headers: parsed[0], rows: parsed.slice(1) })
+      }
+      tableLines = []
+    }
+    for (let line of lines) {
+      if (line.trim().startsWith('|') && line.includes('|')) {
+        inTable = true
+        tableLines.push(line)
+      } else if (inTable) {
+        flush()
+        inTable = false
+      }
+    }
+    if (tableLines.length) flush()
+    return tables
+  }
+
+  const exportToCSV = (tables, filename) => {
+    const parts = tables.map(t => {
+      const esc = (v) => `"${String(v).replace(/"/g, '""')}"`
+      return [t.headers.map(esc).join(','), ...t.rows.map(r => r.map(esc).join(','))].join('\n')
+    })
+    const csv = parts.join('\n\n')
+    const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${filename}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportToExcel = (tables, filename) => {
+    const wb = XLSX.utils.book_new()
+    tables.forEach((t, i) => {
+      const ws = XLSX.utils.aoa_to_sheet([t.headers, ...t.rows])
+      XLSX.utils.book_append_sheet(wb, ws, `Table ${i + 1}`)
+    })
+    XLSX.writeFile(wb, `${filename}.xlsx`)
+  }
+
+  const exportToPDF = (tables, filename) => {
+    const doc = new jsPDF()
+    let y = 14
+    doc.setFontSize(14)
+    doc.text("RSD Enterprise AI - Report", 14, y)
+    y += 8
+    tables.forEach((t) => {
+      doc.autoTable({ head: [t.headers], body: t.rows, startY: y, styles: { fontSize: 8 }, headStyles: { fillColor: [217, 119, 87] } })
+      y = doc.lastAutoTable.finalY + 10
+    })
+    doc.save(`${filename}.pdf`)
   }
 
   const formatText = (text) => {
@@ -364,16 +458,62 @@ export default function App() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: "15px", lineHeight: "1.75", color: c.text, textAlign: "left" }}
                         dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
-                      <button onClick={() => copyText(m.content, m.id)} style={{
-                        background: "transparent", border: "none", cursor: "pointer",
-                        color: c.text2, padding: "4px 0", marginTop: "6px",
-                        display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", opacity: 0.7,
-                      }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = 1}
-                        onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
-                      >
-                        {copiedId === m.id ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
-                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "6px", position: "relative" }}>
+                        <button onClick={() => copyText(m.content, m.id)} style={{
+                          background: "transparent", border: "none", cursor: "pointer",
+                          color: c.text2, padding: "4px 0",
+                          display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", opacity: 0.7,
+                        }}
+                          onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                          onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
+                        >
+                          {copiedId === m.id ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
+                        </button>
+
+                        {parseMarkdownTables(m.content).length > 0 && (
+                          <>
+                            <button onClick={() => setDownloadMenuId(downloadMenuId === m.id ? null : m.id)} style={{
+                              background: "transparent", border: "none", cursor: "pointer",
+                              color: c.text2, padding: "4px 0",
+                              display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", opacity: 0.7,
+                            }}
+                              onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                              onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
+                            >
+                              <Download size={12} /> Download
+                            </button>
+
+                            {downloadMenuId === m.id && (
+                              <>
+                                <div onClick={() => setDownloadMenuId(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
+                                <div style={{
+                                  position: "absolute", top: "24px", left: "70px", zIndex: 70,
+                                  background: c.bg, border: `1px solid ${c.border}`, borderRadius: "10px",
+                                  boxShadow: "0 8px 24px rgba(0,0,0,0.15)", overflow: "hidden", minWidth: "150px",
+                                }}>
+                                  {[
+                                    { label: "CSV", icon: <FileText size={13} />, fn: exportToCSV },
+                                    { label: "Excel", icon: <FileSpreadsheet size={13} />, fn: exportToExcel },
+                                    { label: "PDF", icon: <FileDown size={13} />, fn: exportToPDF },
+                                  ].map(opt => (
+                                    <button key={opt.label} onClick={() => {
+                                      opt.fn(parseMarkdownTables(m.content), `RSD-Report-${m.id}`)
+                                      setDownloadMenuId(null)
+                                    }} style={{
+                                      width: "100%", padding: "9px 14px", background: "transparent", border: "none",
+                                      cursor: "pointer", color: c.text, fontSize: "13px", textAlign: "left",
+                                      display: "flex", alignItems: "center", gap: "8px",
+                                    }}
+                                      onMouseEnter={e => e.currentTarget.style.background = c.hover}
+                                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                                    >{opt.icon} {opt.label}</button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
