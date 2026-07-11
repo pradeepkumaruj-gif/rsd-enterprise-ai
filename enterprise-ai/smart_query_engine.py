@@ -852,9 +852,46 @@ class SmartQueryEngine:
         segment_df = df[df['bd_segment'].str.upper() == bd_segment.upper()]
         if segment_df.empty:
             return {'found': False, 'message': f'"{bd_segment}" not found in bd_segment.'}
+        canonical_segment = segment_df['bd_segment'].iloc[0]
+
+        # Segment-level summary (shown ONCE, above the per-brand table) --
+        # total sale of the whole segment + its share of the overall market.
+        segment_total_qty = int(segment_df['sale_qty_in_box'].sum())
+        segment_pct_of_market = (
+            float(round(segment_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+        )
 
         top_brands = (segment_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
                       .sum().sort_values(ascending=False).head(top_n))
+
+        # Compare brand's TRUE overall stats (its total across ALL shops/
+        # segments, not scoped to any one shop) -- shown ONCE at top level
+        # since it doesn't change per-row. This answers "how big is this
+        # brand OVERALL", separate from "how much of it sells at brand X's
+        # top shop specifically" (which the per-row fields below cover).
+        compare_brand_overall_qty = None
+        compare_brand_overall_pct_of_market = None
+        compare_brand_overall_pct_of_segment = None
+        if compare_brand:
+            comp_all = df[df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
+            compare_brand_overall_qty = int(comp_all['sale_qty_in_box'].sum())
+            compare_brand_overall_pct_of_market = (
+                round(compare_brand_overall_qty / self.total_market * 100, 2) if self.total_market else 0.0
+            )
+            comp_in_segment_qty = int(
+                segment_df[segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
+                ['sale_qty_in_box'].sum()
+            )
+            compare_brand_overall_pct_of_segment = (
+                round(comp_in_segment_qty / segment_total_qty * 100, 2) if segment_total_qty else 0.0
+            )
+
+        # Column keys use the ACTUAL compare_brand name (not a generic
+        # "compare_brand_..." label), so table headers clearly show which
+        # brand's numbers they are.
+        qty_key = f'{compare_brand}_qty_at_shop' if compare_brand else None
+        seg_pct_key = f'{compare_brand}_pct_of_segment_at_shop' if compare_brand else None
+        market_pct_key = f'{compare_brand}_pct_of_overall_market_at_shop' if compare_brand else None
 
         rows = []
         for brand, brand_total_qty in top_brands.items():
@@ -888,16 +925,23 @@ class SmartQueryEngine:
                     (segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
                 ]
                 comp_qty = int(comp_df['sale_qty_in_box'].sum())
-                comp_pct = round(comp_qty / shop_segment_total * 100, 2) if shop_segment_total else 0.0
-                row['compare_brand_qty_at_same_shop'] = comp_qty
-                row['compare_brand_pct_of_segment_at_shop'] = comp_pct
+                comp_seg_pct = round(comp_qty / shop_segment_total * 100, 2) if shop_segment_total else 0.0
+                comp_market_pct = round(comp_qty / self.total_market * 100, 2) if self.total_market else 0.0
+                row[qty_key] = comp_qty
+                row[seg_pct_key] = comp_seg_pct
+                row[market_pct_key] = comp_market_pct
 
             rows.append(row)
 
         return {
             'found': True,
-            'bd_segment': bd_segment,
+            'bd_segment': canonical_segment,
+            'segment_total_sale': segment_total_qty,
+            'segment_pct_of_overall_market': segment_pct_of_market,
             'compare_brand': compare_brand,
+            'compare_brand_overall_qty': compare_brand_overall_qty,
+            'compare_brand_overall_pct_of_market': compare_brand_overall_pct_of_market,
+            'compare_brand_overall_pct_of_segment': compare_brand_overall_pct_of_segment,
             'rows': rows,
         }
 

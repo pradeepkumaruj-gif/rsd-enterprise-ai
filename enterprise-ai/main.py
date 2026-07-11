@@ -627,8 +627,11 @@ FIELD_DISPLAY_LABELS = {
     'top_shop_name': '🏪 Top Shop',
     'brand_qty_at_shop': '📦 Brand Qty at Shop',
     'brand_pct_of_segment_at_shop': '🌍 Brand % of Segment at Shop',
-    'compare_brand_qty_at_same_shop': '📦 Compare Brand Qty (Same Shop)',
-    'compare_brand_pct_of_segment_at_shop': '🌍 Compare Brand % of Segment at Shop',
+    'segment_total_sale': '📦 Segment Total Sale',
+    'segment_pct_of_overall_market': '🌍 Segment % of Overall Market',
+    'compare_brand_overall_qty': '📦 Compare Brand Overall Qty',
+    'compare_brand_overall_pct_of_market': '🌍 Compare Brand Overall Market Share %',
+    'compare_brand_overall_pct_of_segment': '📊 Compare Brand Overall % of Segment',
     'universe_dimension': '🌍 Universe Dimension',
     'total_universe_count': '🔢 Total Universe Count',
     'present_count': '✅ Present Count',
@@ -1410,12 +1413,9 @@ def run_special_intent(intent: str, params: dict):
             if compare_brand:
                 compare_brand = resolve_brand_name(compare_brand)
             bd_segment = resolve_bd_segment_name(params["bd_segment"])
-            engine_result = engine.segment_top_brands_with_shop_and_compare(
+            result = engine.segment_top_brands_with_shop_and_compare(
                 bd_segment, top_n=params.get("top_n", 20), compare_brand=compare_brand,
             )
-            if engine_result.get("found"):
-                return engine_result["rows"]
-            result = engine_result
 
         elif intent == "brand_growth_breakdown":
             df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
