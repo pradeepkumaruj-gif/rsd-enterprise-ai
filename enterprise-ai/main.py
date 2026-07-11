@@ -642,11 +642,11 @@ FIELD_DISPLAY_LABELS = {
     'brand_segment_pct_at_shop': '🌍 Brand Segment % at Shop',
     'brand_total_market_share': '🌍 Brand Total Market Share',
     'segment_total_sale': '📦 Segment Total Sale',
-    'overall_total_market': '📦 Total Sale (Overall Market)',
+    'overall_total_market': '📦 Total Sale (All Segments)',
     'segment_pct_of_overall_market': '🌍 Segment % of Overall Market',
-    'compare_brand_overall_qty': '📦 Compare Brand Overall Qty',
-    'compare_brand_overall_pct_of_market': '🌍 Compare Brand Overall Market Share %',
-    'compare_brand_overall_pct_of_segment': '📊 Compare Brand Overall % of Segment',
+    'compare_brand_overall_qty': '📦 Qty',
+    'compare_brand_overall_pct_of_market': '🌍 Market Share',
+    'compare_brand_overall_pct_of_segment': '📊 Segment Share',
     'compare_brand_qty_at_shop': '📦 Compare Brand Qty at Shop',
     'segment_pct_at_shop': '🌍 Segment % at Shop',
     'total_market_share': '🌍 Total Market Share',
@@ -772,6 +772,19 @@ def _pretty_label(key: str) -> str:
     return FIELD_DISPLAY_LABELS.get(key, "📌 " + str(key).replace("_", " ").title())
 
 
+# Scalar (non-table) fields that represent a percentage -- when rendered as
+# a plain "**Label:** value" line, a "%" is appended automatically so the
+# number is unambiguous (e.g. "Market Share: 0.03%" instead of just "0.03").
+PCT_SUFFIX_KEYS = {
+    'segment_pct_of_overall_market',
+    'compare_brand_overall_pct_of_market',
+    'compare_brand_overall_pct_of_segment',
+    'primary_pct_of_overall_market',
+    'market_share_pct',
+    'pct_of_market',
+}
+
+
 # Eye-catching emojis for the top 3 rows of a 'pct_change' column -- gainers
 # (positive %) get rocket/fire emojis, losers (negative %) get warning/down
 # emojis. Only the first 3 rows get decorated (assumes the list is already
@@ -844,6 +857,8 @@ def render_data_deterministically(data) -> str:
                 sections.append(f"**{label}**\n\n{dicts_to_markdown_table(records)}")
             elif isinstance(value, list):
                 sections.append(f"**{label}:** {', '.join(str(v) for v in value)}")
+            elif key in PCT_SUFFIX_KEYS and isinstance(value, (int, float)):
+                sections.append(f"**{label}:** {value}%")
             else:
                 sections.append(f"**{label}:** {value}")
         return "\n\n".join(sections)
