@@ -377,7 +377,76 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     brands aur un shop ka market share" (-> brand_name: "Dennis", find_bottom: true,
     bottom_n_shops: 10, top_n_other_brands: 5, restrict_to_own_segment: true)
 
-Agar sawaal upar ke kisi specific intent (2-18) se match nahi karta, "generic" use karo.
+19. "dimension_breakdown_report" -- UNIVERSAL "Excel filter" style tool: KISI BHI dimensions
+    (EK YA ZYADA ek saath, jaise Excel ka multi-column AutoFilter) ko filter karo (PRIMARY
+    FILTERS), phir KOI BHI DOOSRA dimension (BREAKDOWN) ka top-N ranking do -- overall market %
+    + filter ke andar % dono ke saath. Yeh EK function har combination cover karta hai:
+    Segment→Brand, Department→TSE, Company→Shop, Segment+Department→Brand (do filters ek saath),
+    waghera -- koi bhi filters+breakdown combination chalega.
+    params: {{"primary_filters": {{"bd_segment": "Premium Whisky"}}, "breakdown_dimension": "brand",
+    "top_n": 5}}
+    - "primary_filters" EK dict hai -- ismein EK ya ZYADA dimension:value pairs daal sakte ho
+      (jaise {{"bd_segment": "Premium Whisky", "department": "DCCWS"}} agar user dono filters
+      ek saath bole). Dimensions ho sakte hain: "bd_segment", "department", "company", "party"
+      (shop), "tse", "liquor_type", "pack_size", "brand", "month", "category", "shop_code".
+    - "breakdown_dimension" ek dimension hai jiska ranking chahiye (koi bhi upar wali list se).
+    - USE THIS jab bhi sawaal ho: "[X ka filter] ka overall market share + [Y dimension] ka top N
+      breakdown, unka % share ke saath" -- jaise "Premium Whisky ka market share aur is segment
+      mein top 5 brands aur unka market share" (-> primary_filters: {{"bd_segment": "Premium
+      Whisky"}}, breakdown_dimension: "brand"). IMPORTANT: agar filter value ek segment ka naam
+      hai (bd_segment list se), use bd_segment maano, brand naam SAMAJH KE dhoondhne ki koshish
+      MAT karo.
+    Trigger: "Premium Whisky ka market share aur top 5 brands aur unka share" (-> primary_filters:
+    {{"bd_segment": "Premium Whisky"}}, breakdown_dimension: "brand"), "DCCWS department mein top
+    5 TSE ka share" (-> primary_filters: {{"department": "DCCWS"}}, breakdown_dimension: "tse"),
+    "OMSONS company ke top shops market share ke saath" (-> primary_filters: {{"company":
+    "OMSONS"}}, breakdown_dimension: "party"), "Premium Whisky AUR DCCWS department mein top 5
+    brands" (-> primary_filters: {{"bd_segment": "Premium Whisky", "department": "DCCWS"}},
+    breakdown_dimension: "brand" -- DO filters ek saath)
+
+20. "zero_presence_analysis" -- kisi filter (company/brand/etc) ka koi bhi presence NAHI hai
+    jin values mein (poore universe mein, na ki kisi doosre brand ke top shops mein) -- TRUE
+    zero-sale gap analysis.
+    params: {{"filter_dimension": "company", "filter_value": "Rock and Storm",
+    "universe_dimension": "shop_code", "show_hero_brand_in_segment": false}}
+    "filter_dimension" wahi hai jiska zero-presence check karna hai (jaise "company", "brand").
+    "universe_dimension" wahi hai jiske across check karna hai (default "shop_code" -- saari
+    shops mein se kaha bilkul sale nahi).
+    "show_hero_brand_in_segment": true -- jab user pooche "wahan iski jagah kaun jeet raha hai/
+    hero brand kaun hai (SAME segment mein)" -- sirf tab kaam karta hai jab filter_dimension
+    "brand" ho aur universe_dimension "shop_code" ho. Har zero-presence shop ke liye, us brand
+    ke APNE bd_segment ke andar wahan ka top-selling brand bhi dikhata hai.
+    Trigger: "Rock and Storm ka koi bhi brand kis shop mein sale nahi hota", "Dennis kis shops
+    mein bilkul absent hai", "kaunse shops mein OMSONS ka koi presence nahi hai", "Dennis brand
+    ka koi bhi Whisky product kis shop codes mein sale nahi hua, aur wahan same segment mein
+    kaun sa brand hero hai" (-> show_hero_brand_in_segment: true)
+
+21. "cross_tab_matrix" -- DO dimensions ka grid/pivot table (Excel pivot jaisa) -- ek dimension
+    ROWS mein, doosra COLUMNS mein, sale qty cells mein.
+    params: {{"row_dimension": "department", "col_dimension": "liquor_type", "top_rows": 10,
+    "top_cols": 8}}
+    Trigger: "Department vs Liquor Type ka grid dikhao", "BD Segment vs Department ka pura
+    matrix", "TSE vs Month ka cross table"
+
+22. "compound_ranking" -- brands ko DO criteria se ek saath rank karo: current VOLUME aur
+    GROWTH % dono (automatically latest vs pichla mahina). Woh brands top pe aayenge jo dono
+    mein achhe hain (na ki sirf volume mein ya sirf growth mein).
+    params: {{"rank_col": "brand", "top_n": 10, "min_base": 100}}
+    Trigger: "Top 10 by volume AND growth dono", "kaunse brands overall best hain volume aur
+    growth dono ke hisaab se", "balanced performers dikhao"
+
+23. "segment_top_brands_with_shop_and_compare" -- ek BD Segment ke top N brands, HAR brand ki
+    apni #1 (best-selling) shop, us shop pe us brand ka % share (SEGMENT ke andar, usi shop
+    mein), PLUS ek SPECIFIC doosra brand ka status usi shop pe (uski qty + % share bhi segment
+    ke andar).
+    params: {{"bd_segment": "Semi Pre Whisky", "top_n": 20, "compare_brand": "8 PM PREMIUM BLACK BLENDED WHISKY"}}
+    "compare_brand" OPTIONAL hai -- agar diya, har row mein us brand ka bhi data aayega usi shop
+    ke liye. Agar nahi diya, sirf top brands + unki shops + % share aayega.
+    Trigger: "Semi Pre Whisky segment mein top 20 brands, kaunsi shop pe, shop ka market share %,
+    aur usi shop pe 8PM ki sale/status kya hai market share % ke saath" -- yeh EXACTLY is intent
+    ka case hai.
+
+Agar sawaal upar ke kisi specific intent (2-23) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -554,6 +623,36 @@ FIELD_DISPLAY_LABELS = {
     'total_count': '🔢 Total Count',
     'top_brand_pct': '📊 Top Brand % of Total',
     'value': '📊 Value',
+    'brand_total_qty_in_segment': '📦 Brand Total Qty (Segment)',
+    'top_shop_name': '🏪 Top Shop',
+    'brand_qty_at_shop': '📦 Brand Qty at Shop',
+    'brand_pct_of_segment_at_shop': '🌍 Brand % of Segment at Shop',
+    'compare_brand_qty_at_same_shop': '📦 Compare Brand Qty (Same Shop)',
+    'compare_brand_pct_of_segment_at_shop': '🌍 Compare Brand % of Segment at Shop',
+    'universe_dimension': '🌍 Universe Dimension',
+    'total_universe_count': '🔢 Total Universe Count',
+    'present_count': '✅ Present Count',
+    'absent_count': '❌ Absent Count (Zero Sale)',
+    'absent_items': '❌ Zero-Sale Items',
+    'shop_name': '🏪 Shop Name',
+    'hero_brand_in_segment': '👑 Hero Brand (Same Segment)',
+    'hero_brand_qty': '📦 Hero Brand Qty',
+    'row_dimension': '📊 Row Dimension',
+    'col_dimension': '📊 Column Dimension',
+    'matrix': '📊 Matrix',
+    'ranking': '🏆 Ranking',
+    'volume_rank': '📦 Volume Rank',
+    'growth_rank': '📈 Growth Rank',
+    'combined_rank_score': '🏆 Combined Score',
+    'filters_applied': '🔍 Filters Applied',
+    'breakdown_dimension': '🔍 Breakdown Dimension',
+    'primary_total_qty': '📦 Total Qty',
+    'primary_pct_of_overall_market': '🌍 Overall Market Share %',
+    'breakdown': '📊 Breakdown',
+    'item': '⭐ Item',
+    'qty': '📦 Qty',
+    'pct_within_primary': '📊 % Within Filter',
+    'pct_of_overall_market': '🌍 % of Overall Market',
     'top_brand_market_share_pct_at_shop': '🌍 Market Share % (Segment)',
     'rank_here': '🏆 Rank Here',
     'top_brand_here': '⭐ Top Brand Here',
@@ -1251,6 +1350,70 @@ def run_special_intent(intent: str, params: dict):
                 # directly (a list), so the normal /chat pipeline renders
                 # it as a table and adds ONE insight line, same as every
                 # other intent (no need to duplicate that logic here).
+                return engine_result["rows"]
+            result = engine_result
+
+        elif intent == "dimension_breakdown_report":
+            breakdown_col = DIMENSIONS.get(params.get("breakdown_dimension"))
+            if not breakdown_col:
+                return "Valid breakdown_dimension chahiye."
+            raw_filters = params.get("primary_filters") or {}
+            if not raw_filters:
+                return "Kam se kam ek primary filter chahiye (jaise segment, department, company)."
+            resolved_filters = {}
+            for dim, value in raw_filters.items():
+                col = DIMENSIONS.get(dim)
+                if col:
+                    resolved_filters[col] = fuzzy_resolve_value(str(value), col)
+            result = engine.dimension_breakdown_report(
+                resolved_filters, breakdown_col, top_n=params.get("top_n", 5)
+            )
+
+        elif intent == "zero_presence_analysis":
+            filter_col = DIMENSIONS.get(params.get("filter_dimension"))
+            universe_col = DIMENSIONS.get(params.get("universe_dimension") or "shop_code")
+            if not filter_col or not universe_col:
+                return "Valid filter_dimension aur universe_dimension chahiye."
+            resolved_value = fuzzy_resolve_value(str(params.get("filter_value", "")), filter_col)
+            result = engine.zero_presence_analysis(
+                filter_col, resolved_value, universe_col,
+                show_hero_brand_in_segment=params.get("show_hero_brand_in_segment", False),
+            )
+
+        elif intent == "cross_tab_matrix":
+            row_col = DIMENSIONS.get(params.get("row_dimension"))
+            col_col = DIMENSIONS.get(params.get("col_dimension"))
+            if not row_col or not col_col:
+                return "Valid row_dimension aur col_dimension chahiye."
+            result = engine.cross_tab_matrix(
+                row_col, col_col,
+                top_rows=params.get("top_rows", 10),
+                top_cols=params.get("top_cols", 8),
+            )
+
+        elif intent == "compound_ranking":
+            df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+            if df_current is None:
+                return "Compound ranking ke liye kam se kam 2 mahino ka data chahiye."
+            rank_col = DIMENSIONS.get(params.get("rank_col") or "brand") or COL_BRAND
+            engine_result = SmartQueryEngine.compound_ranking(
+                df_current, df_previous, rank_col=rank_col,
+                top_n=params.get("top_n", 10), min_base=params.get("min_base", 100),
+            )
+            if engine_result.get("found"):
+                engine_result["current_month"] = cur_label
+                engine_result["previous_month"] = prev_label
+            result = engine_result
+
+        elif intent == "segment_top_brands_with_shop_and_compare":
+            compare_brand = params.get("compare_brand")
+            if compare_brand:
+                compare_brand = resolve_brand_name(compare_brand)
+            bd_segment = resolve_bd_segment_name(params["bd_segment"])
+            engine_result = engine.segment_top_brands_with_shop_and_compare(
+                bd_segment, top_n=params.get("top_n", 20), compare_brand=compare_brand,
+            )
+            if engine_result.get("found"):
                 return engine_result["rows"]
             result = engine_result
 

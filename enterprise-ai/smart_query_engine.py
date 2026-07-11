@@ -675,6 +675,233 @@ class SmartQueryEngine:
         return {'found': True, 'companies_compared': len(companies), 'details': details}
 
     # ------------------------------------------------------------------
+    # u) UNIVERSAL dimension breakdown report -- the "Excel filter" style
+    #    tool: take ANY dimension + value as the primary filter (segment,
+    #    department, company, shop, liquor_type, pack_size...), and get a
+    #    breakdown by ANY OTHER dimension, with %-of-market AND
+    #    %-within-the-primary-filter for every breakdown row. This single
+    #    function covers "Premium Whisky segment's overall share + its top
+    #    5 brands with their share", "DCCWS department's top TSEs",
+    #    "Company X's top shops", etc. -- any primary+breakdown combination,
+    #    without needing a dedicated function per combination.
+    # ------------------------------------------------------------------
+    def dimension_breakdown_report(self, primary_filters: dict, breakdown_col: str, top_n: int = 5):
+        """primary_filters: dict of {column: value} -- can be ONE filter or
+        MULTIPLE filters combined (like Excel's AutoFilter on several
+        columns at once), e.g. {'bd_segment': 'Premium Whisky',
+        'department': 'DCCWS'} filters BOTH simultaneously before doing
+        the breakdown."""
+        df = self.df
+        filtered = df
+        canonical_filters = {}
+        for col, value in primary_filters.items():
+            match_mask = filtered[col].astype(str).str.upper() == str(value).upper()
+            if not match_mask.any():
+                return {'found': False, 'message': f'"{value}" not found in {col}.'}
+            canonical_filters[col] = filtered.loc[match_mask, col].iloc[0]
+            filtered = filtered[match_mask]
+
+        if filtered.empty:
+            return {'found': False, 'message': 'Is filter combination ke liye koi data nahi mila.'}
+
+        primary_total_qty = int(filtered['sale_qty_in_box'].sum())
+        primary_pct_of_market = float(round(primary_total_qty / self.total_market * 100, 2))
+
+        breakdown_qty = (filtered.groupby(breakdown_col)['sale_qty_in_box']
+                          .sum().sort_values(ascending=False).head(top_n))
+
+        breakdown_rows = []
+        for item, qty in breakdown_qty.items():
+            qty = int(qty)
+            breakdown_rows.append({
+                'item': item,
+                'qty': qty,
+                'pct_within_primary': float(round(qty / primary_total_qty * 100, 2)) if primary_total_qty else 0.0,
+                'pct_of_overall_market': float(round(qty / self.total_market * 100, 2)),
+            })
+
+        return {
+            'found': True,
+            'filters_applied': canonical_filters,
+            'breakdown_dimension': breakdown_col,
+            'primary_total_qty': primary_total_qty,
+            'primary_pct_of_overall_market': primary_pct_of_market,
+            'breakdown': breakdown_rows,
+        }
+
+    # ------------------------------------------------------------------
+    # v) GAP #7: Zero-presence analysis -- given a filter (e.g. a company),
+    #    find ALL values of a "universe" dimension (e.g. all shops) where
+    #    that filter has ZERO sales -- true absence across the FULL
+    #    universe, not just within some other brand's top-N shops.
+    # ------------------------------------------------------------------
+    def zero_presence_analysis(self, filter_col: str, filter_value: str, universe_col: str = 'shop_code',
+                                show_hero_brand_in_segment: bool = False):
+        df = self.df
+        mask = df[filter_col].astype(str).str.upper() == str(filter_value).upper()
+        if not mask.any():
+            return {'found': False, 'message': f'"{filter_value}" not found in {filter_col}.'}
+        canonical_value = df.loc[mask, filter_col].iloc[0]
+
+        all_universe_values = set(df[universe_col].dropna().unique())
+        present_universe_values = set(df.loc[mask, universe_col].dropna().unique())
+        absent_values = sorted(all_universe_values - present_universe_values)
+
+        if universe_col == 'shop_code':
+            name_map = (df.drop_duplicates('shop_code')
+                        .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
+            absent_items = [{'shop_code': v, 'shop_name': name_map.get(v, '')} for v in absent_values]
+        else:
+            absent_items = [{'item': v} for v in absent_values]
+
+        # Optional enrichment: at EACH zero-presence shop, who is the "hero"
+        # (top-selling) brand within the SAME bd_segment as the filter
+        # brand? E.g. "Dennis absent here -- who's winning Regular Whisky
+        # at this shop instead?" -- only makes sense when filter_col is a
+        # brand (bd_segment is a brand-level attribute).
+        if show_hero_brand_in_segment and filter_col == 'brand_name_as_per_company_data' and universe_col == 'shop_code':
+            own_bd_segment = df.loc[mask, 'bd_segment'].unique()
+            segment_df = df[df['bd_segment'].isin(own_bd_segment)]
+            for item in absent_items[:50]:
+                shop_seg_df = segment_df[segment_df['shop_code'] == item['shop_code']]
+                if not shop_seg_df.empty:
+                    hero = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                            .sum().sort_values(ascending=False))
+                    item['hero_brand_in_segment'] = hero.index[0]
+                    item['hero_brand_qty'] = int(hero.iloc[0])
+                else:
+                    item['hero_brand_in_segment'] = None
+                    item['hero_brand_qty'] = 0
+
+        return {
+            'found': True,
+            filter_col: canonical_value,
+            'universe_dimension': universe_col,
+            'total_universe_count': len(all_universe_values),
+            'present_count': len(present_universe_values),
+            'absent_count': len(absent_values),
+            'absent_items': absent_items[:50],  # cap for readable display
+        }
+
+    # ------------------------------------------------------------------
+    # w) GAP #9: Cross-tab / matrix report -- one dimension as rows,
+    #    another as columns, sale qty as cell values (like an Excel
+    #    pivot table).
+    # ------------------------------------------------------------------
+    def cross_tab_matrix(self, row_dim: str, col_dim: str, top_rows: int = 10, top_cols: int = 8):
+        df = self.df
+        top_row_vals = (df.groupby(row_dim)['sale_qty_in_box'].sum()
+                         .sort_values(ascending=False).head(top_rows).index.tolist())
+        top_col_vals = (df.groupby(col_dim)['sale_qty_in_box'].sum()
+                         .sort_values(ascending=False).head(top_cols).index.tolist())
+
+        filtered = df[df[row_dim].isin(top_row_vals) & df[col_dim].isin(top_col_vals)]
+        if filtered.empty:
+            return {'found': False, 'message': 'Is combination ke liye koi data nahi mila.'}
+
+        pivot = filtered.pivot_table(index=row_dim, columns=col_dim, values='sale_qty_in_box',
+                                      aggfunc='sum', fill_value=0)
+        pivot = pivot.reindex(index=top_row_vals, columns=top_col_vals, fill_value=0)
+        pivot.columns.name = None
+
+        return {
+            'found': True,
+            'row_dimension': row_dim,
+            'col_dimension': col_dim,
+            'matrix': pivot.reset_index().to_dict('records'),
+        }
+
+    # ------------------------------------------------------------------
+    # x) GAP #10: Compound ranking -- rank items by BOTH current volume
+    #    AND month-over-month growth simultaneously (two criteria at
+    #    once), showing both ranks side by side.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def compound_ranking(df_current, df_previous, rank_col: str = 'brand_name_as_per_company_data',
+                          top_n: int = 10, min_base: int = 100):
+        cur = df_current.groupby(rank_col)['sale_qty_in_box'].sum()
+        prev = df_previous.groupby(rank_col)['sale_qty_in_box'].sum()
+        merged = pd.DataFrame({'current_qty': cur, 'previous_qty': prev}).fillna(0)
+        merged = merged[merged['previous_qty'] >= min_base]
+        if merged.empty:
+            return {'found': False, 'message': 'min_base ke saath koi data nahi mila.'}
+
+        merged['pct_change'] = (
+            (merged['current_qty'] - merged['previous_qty']) / merged['previous_qty'] * 100
+        ).round(2)
+        merged['volume_rank'] = merged['current_qty'].rank(ascending=False, method='min').astype(int)
+        merged['growth_rank'] = merged['pct_change'].rank(ascending=False, method='min').astype(int)
+        merged['combined_rank_score'] = merged['volume_rank'] + merged['growth_rank']
+
+        top = merged.sort_values('combined_rank_score').head(top_n).reset_index()
+        top['current_qty'] = top['current_qty'].astype(int)
+        top['previous_qty'] = top['previous_qty'].astype(int)
+
+        return {'found': True, 'ranking': top.to_dict('records')}
+
+    # ------------------------------------------------------------------
+    # y) Segment top brands + each brand's #1 shop + segment-share there,
+    #    PLUS a specific compare_brand's status at those SAME shops.
+    #    e.g. "Semi Pre Whisky top 20 brands, their best shop, that
+    #    brand's segment-share at that shop, and what 8PM's segment-share
+    #    is at that SAME shop" -- a nested drill-down comparison.
+    # ------------------------------------------------------------------
+    def segment_top_brands_with_shop_and_compare(self, bd_segment: str, top_n: int = 20,
+                                                   compare_brand: str = None):
+        df = self.df
+        segment_df = df[df['bd_segment'].str.upper() == bd_segment.upper()]
+        if segment_df.empty:
+            return {'found': False, 'message': f'"{bd_segment}" not found in bd_segment.'}
+
+        top_brands = (segment_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                      .sum().sort_values(ascending=False).head(top_n))
+
+        rows = []
+        for brand, brand_total_qty in top_brands.items():
+            brand_df = segment_df[segment_df['brand_name_as_per_company_data'] == brand]
+            shop_qty = (brand_df.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
+                        .sum().sort_values(ascending=False))
+            if shop_qty.empty:
+                continue
+            top_shop_code, top_shop_name = shop_qty.index[0]
+            brand_qty_at_shop = int(shop_qty.iloc[0])
+
+            # Segment total AT THIS SPECIFIC SHOP (denominator for % share)
+            shop_segment_total = int(
+                segment_df[segment_df['shop_code'] == top_shop_code]['sale_qty_in_box'].sum()
+            )
+            brand_pct_at_shop = (
+                round(brand_qty_at_shop / shop_segment_total * 100, 2) if shop_segment_total else 0.0
+            )
+
+            row = {
+                'brand': brand,
+                'brand_total_qty_in_segment': int(brand_total_qty),
+                'top_shop_name': top_shop_name,
+                'brand_qty_at_shop': brand_qty_at_shop,
+                'brand_pct_of_segment_at_shop': brand_pct_at_shop,
+            }
+
+            if compare_brand:
+                comp_df = segment_df[
+                    (segment_df['shop_code'] == top_shop_code) &
+                    (segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
+                ]
+                comp_qty = int(comp_df['sale_qty_in_box'].sum())
+                comp_pct = round(comp_qty / shop_segment_total * 100, 2) if shop_segment_total else 0.0
+                row['compare_brand_qty_at_same_shop'] = comp_qty
+                row['compare_brand_pct_of_segment_at_shop'] = comp_pct
+
+            rows.append(row)
+
+        return {
+            'found': True,
+            'bd_segment': bd_segment,
+            'compare_brand': compare_brand,
+            'rows': rows,
+        }
+
+    # ------------------------------------------------------------------
     # p) Growth breakdown -- WHERE (which department/shop/TSE) did a
     #    brand's month-over-month growth/decline actually come from.
     #    NOTE: this only decomposes growth by data dimensions already in
