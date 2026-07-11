@@ -855,8 +855,10 @@ class SmartQueryEngine:
         canonical_segment = segment_df['bd_segment'].iloc[0]
 
         # Segment-level summary (shown ONCE, above the per-brand table) --
-        # total sale of the whole segment + its share of the overall market.
+        # total sale of the whole segment + its share of the overall market
+        # + the overall market total itself (for direct comparison).
         segment_total_qty = int(segment_df['sale_qty_in_box'].sum())
+        overall_total_market = int(self.total_market)
         segment_pct_of_market = (
             float(round(segment_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
         )
@@ -886,12 +888,13 @@ class SmartQueryEngine:
                 round(comp_in_segment_qty / segment_total_qty * 100, 2) if segment_total_qty else 0.0
             )
 
-        # Column keys use the ACTUAL compare_brand name (not a generic
-        # "compare_brand_..." label), so table headers clearly show which
-        # brand's numbers they are.
-        qty_key = f'{compare_brand}_qty_at_shop' if compare_brand else None
-        seg_pct_key = f'{compare_brand}_pct_of_segment_at_shop' if compare_brand else None
-        market_pct_key = f'{compare_brand}_pct_of_overall_market_at_shop' if compare_brand else None
+        # FIXED (not dynamic) column keys -- the compare_brand's actual name
+        # is already shown once at the top level, so per-row columns use
+        # short, clean, constant labels instead of repeating the full brand
+        # name in every column header.
+        qty_key = 'compare_brand_qty_at_shop'
+        seg_pct_key = 'segment_pct_at_shop'
+        market_pct_key = 'total_market_share'
 
         rows = []
         for brand, brand_total_qty in top_brands.items():
@@ -910,13 +913,20 @@ class SmartQueryEngine:
             brand_pct_at_shop = (
                 round(brand_qty_at_shop / shop_segment_total * 100, 2) if shop_segment_total else 0.0
             )
+            # This brand's OWN overall total-market share % (not scoped to
+            # this one shop) -- so both the top brand AND the compare brand
+            # have a like-for-like "overall market share" figure shown.
+            brand_overall_market_pct = (
+                float(round(int(brand_total_qty) / self.total_market * 100, 2)) if self.total_market else 0.0
+            )
 
             row = {
                 'brand': brand,
                 'brand_total_qty_in_segment': int(brand_total_qty),
                 'top_shop_name': top_shop_name,
                 'brand_qty_at_shop': brand_qty_at_shop,
-                'brand_pct_of_segment_at_shop': brand_pct_at_shop,
+                'brand_segment_pct_at_shop': brand_pct_at_shop,
+                'brand_total_market_share': brand_overall_market_pct,
             }
 
             if compare_brand:
@@ -925,8 +935,8 @@ class SmartQueryEngine:
                     (segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
                 ]
                 comp_qty = int(comp_df['sale_qty_in_box'].sum())
-                comp_seg_pct = round(comp_qty / shop_segment_total * 100, 2) if shop_segment_total else 0.0
-                comp_market_pct = round(comp_qty / self.total_market * 100, 2) if self.total_market else 0.0
+                comp_seg_pct = float(round(comp_qty / shop_segment_total * 100, 2)) if shop_segment_total else 0.0
+                comp_market_pct = float(round(comp_qty / self.total_market * 100, 2)) if self.total_market else 0.0
                 row[qty_key] = comp_qty
                 row[seg_pct_key] = comp_seg_pct
                 row[market_pct_key] = comp_market_pct
@@ -937,12 +947,13 @@ class SmartQueryEngine:
             'found': True,
             'bd_segment': canonical_segment,
             'segment_total_sale': segment_total_qty,
+            'overall_total_market': overall_total_market,
             'segment_pct_of_overall_market': segment_pct_of_market,
             'compare_brand': compare_brand,
             'compare_brand_overall_qty': compare_brand_overall_qty,
             'compare_brand_overall_pct_of_market': compare_brand_overall_pct_of_market,
             'compare_brand_overall_pct_of_segment': compare_brand_overall_pct_of_segment,
-            'rows': rows,
+            'top_brands': rows,
         }
 
     # ------------------------------------------------------------------
