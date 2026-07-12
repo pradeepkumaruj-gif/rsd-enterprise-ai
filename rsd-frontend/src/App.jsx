@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react"
 import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X, Download, FileSpreadsheet, FileText, FileDown } from "lucide-react"
 import * as XLSX from "xlsx"
+import ExcelJS from "exceljs"
 import jsPDF from "jspdf"
 import "jspdf-autotable"
 
@@ -214,13 +215,69 @@ export default function App() {
     URL.revokeObjectURL(url)
   }
 
-  const exportToExcel = (tables, filename) => {
-    const wb = XLSX.utils.book_new()
+  const exportToExcel = async (tables, filename) => {
+    const wb = new ExcelJS.Workbook()
     tables.forEach((t, i) => {
-      const ws = XLSX.utils.aoa_to_sheet([t.headers, ...t.rows])
-      XLSX.utils.book_append_sheet(wb, ws, `Table ${i + 1}`)
+      const ws = wb.addWorksheet(`Table ${i + 1}`)
+      ws.addRow(t.headers)
+      t.rows.forEach(r => ws.addRow(r))
+
+      // Header row: bold white text on blue fill, centered, wrapped, bordered
+      const headerRow = ws.getRow(1)
+      headerRow.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F6FB2' } }
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFAAAAAA' } },
+          bottom: { style: 'thin', color: { argb: 'FFAAAAAA' } },
+          left: { style: 'thin', color: { argb: 'FFAAAAAA' } },
+          right: { style: 'thin', color: { argb: 'FFAAAAAA' } },
+        }
+      })
+      headerRow.height = 32
+
+      // Data rows: subtle borders + alternating (zebra) fill for readability
+      for (let r = 2; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r)
+        row.eachCell(cell => {
+          cell.font = { size: 10.5, name: 'Calibri' }
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            left: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            right: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+          }
+          cell.alignment = { vertical: 'top', wrapText: true }
+        })
+        if (r % 2 === 0) {
+          row.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F8FC' } }
+          })
+        }
+      }
+
+      // Auto column width based on longest content in that column (capped)
+      t.headers.forEach((h, idx) => {
+        let maxLen = String(h || '').length
+        t.rows.forEach(row => {
+          const val = String(row[idx] || '')
+          if (val.length > maxLen) maxLen = val.length
+        })
+        ws.getColumn(idx + 1).width = Math.min(Math.max(maxLen + 2, 12), 42)
+      })
+
+      ws.views = [{ state: 'frozen', ySplit: 1 }]  // freeze header row while scrolling
     })
-    XLSX.writeFile(wb, `${filename}.xlsx`)
+
+    const buffer = await wb.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${filename}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const exportToPDF = (tables, filename) => {
