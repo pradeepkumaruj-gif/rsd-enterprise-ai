@@ -782,7 +782,7 @@ class SmartQueryEngine:
                 'target_transaction_count': target_count,
                 'comparison': comparison,
                 'matching_shops_count': total_matching,
-                'shops_shown': min(top_n_shops, total_matching),
+                'shops_shown': total_matching if top_n_shops is None else min(top_n_shops, total_matching),
                 'rows': rows,
             }
 
@@ -900,7 +900,7 @@ class SmartQueryEngine:
             'brand_query_name': brand_name,
             'brand_segment_name': canonical_segment,
             'matching_shops_count': total_matching,
-            'shops_shown': min(top_n_shops, total_matching),
+            'shops_shown': total_matching if top_n_shops is None else min(top_n_shops, total_matching),
             'pivot_rows': rows,
         }
 
@@ -969,7 +969,7 @@ class SmartQueryEngine:
             'brand_query_name': brand_name,
             'brand_segment_name': canonical_segment,
             'matching_shops_count': total_matching,
-            'shops_shown': min(top_n_shops, total_matching),
+            'shops_shown': total_matching if top_n_shops is None else min(top_n_shops, total_matching),
             'blocks': blocks,
         }
 

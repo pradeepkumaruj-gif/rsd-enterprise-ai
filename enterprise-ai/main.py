@@ -1505,7 +1505,7 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 brand_name,
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
-                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
+                top_n_shops=min(params.get("top_n_shops", 10), 2000),  # safety ceiling (effectively open)
                 top_n_brands=params.get("top_n_brands", 3),
                 other_n_brands=params.get("other_n_brands", 5),
                 other_min_pct=params.get("other_min_pct", 1.0),
@@ -1537,12 +1537,25 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             brand_name = resolve_brand_name(params["brand_name"])
             top_n_brands = params.get("top_n_brands", 3)
             other_n_brands = params.get("other_n_brands", 5)
-            DISPLAY_CAP = 20  # on-screen readability cap; download gets the FULL computed set
+            requested_top_n = params.get("top_n_shops", 10)
+            # DISPLAY_CAP: 20 by default, but if user EXPLICITLY asked for
+            # more than 20 shown, respect that (up to the hard safety cap).
+            DISPLAY_CAP = max(requested_top_n, 20) if requested_top_n > 20 else 20
+            # COMPUTE cap: ALWAYS generous (200) regardless of what the
+            # parser defaulted to -- otherwise, if the user's query didn't
+            # explicitly mention a number, the engine only computes 10
+            # rows to begin with, and the "download gets everything" logic
+            # has nothing extra to actually download.
+            # NO artificial cap -- None means "return every matching shop,
+            # however many there are". The dataset itself naturally bounds
+            # this (there are only ~1440 shops total in existence here),
+            # so there's no real-world scenario where this needs limiting.
+            compute_cap = None
             engine_result = engine.brand_transaction_count_pivot_view(
                 brand_name,
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
-                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
+                top_n_shops=compute_cap,
                 top_n_brands=top_n_brands,
                 other_n_brands=other_n_brands,
                 other_min_pct=params.get("other_min_pct", 1.0),
@@ -1614,7 +1627,7 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
                 show_segment_top_brands=params.get("show_segment_top_brands", False),
-                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
+                top_n_shops=min(params.get("top_n_shops", 10), 2000),  # safety ceiling (effectively open)
                 top_n_brands=params.get("top_n_brands", 5),
             )
             if engine_result.get("found"):
