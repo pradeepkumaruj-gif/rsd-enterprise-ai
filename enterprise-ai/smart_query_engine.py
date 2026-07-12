@@ -842,6 +842,9 @@ class SmartQueryEngine:
         own_bd_segment = sub['bd_segment'].unique()
         segment_df = df[df['bd_segment'].isin(own_bd_segment)]
 
+        canonical_segment = own_bd_segment[0] if len(own_bd_segment) else ''
+        segment_col_key = 'segment_sale_at_shop'
+
         rows = []
         for (shop_code, shop_name), _count in list(matched.items())[:top_n_shops]:
             shop_seg_df = segment_df[segment_df['shop_code'] == shop_code]
@@ -866,11 +869,17 @@ class SmartQueryEngine:
 
             row = {
                 'shop': shop_name,
+                segment_col_key: shop_seg_total,
                 'brand_query_shop_seg_pct': f"{brand_qty} / {brand_pct}%",
             }
             for i, (b, q) in enumerate(top_n.items(), 1):
                 pct = round(int(q) / shop_seg_total * 100, 2) if shop_seg_total else 0.0
                 row[f'top_{i}'] = f"{self._short_brand_name(b, name_maxlen)}: {int(q)}/{pct}%"
+
+            top_n_qty_sum = int(top_n.sum())
+            top_n_pct_sum = round(top_n_qty_sum / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+            row['total_top_n'] = f"{top_n_qty_sum} / {top_n_pct_sum}%"
+
             for i in range(1, other_n_brands + 1):
                 if i <= len(qualifying):
                     b, q = list(qualifying.items())[i - 1]
@@ -878,6 +887,11 @@ class SmartQueryEngine:
                     row[f'brand_{i}'] = f"{self._short_brand_name(b, name_maxlen)}: {int(q)}/{pct}%"
                 else:
                     row[f'brand_{i}'] = "-"
+
+            other_qty_sum = int(qualifying.sum())
+            other_pct_sum = round(other_qty_sum / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+            row['total_other_n'] = f"{other_qty_sum} / {other_pct_sum}%"
+
             rows.append(row)
 
         canonical_segment = own_bd_segment[0] if len(own_bd_segment) else ''

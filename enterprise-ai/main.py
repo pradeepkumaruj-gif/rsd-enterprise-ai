@@ -1520,26 +1520,58 @@ def run_special_intent(intent: str, params: dict, working_df=None):
 
         elif intent == "brand_transaction_count_pivot_view":
             brand_name = resolve_brand_name(params["brand_name"])
+            top_n_brands = params.get("top_n_brands", 3)
+            other_n_brands = params.get("other_n_brands", 5)
             engine_result = engine.brand_transaction_count_pivot_view(
                 brand_name,
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
                 top_n_shops=params.get("top_n_shops", 10),
-                top_n_brands=params.get("top_n_brands", 3),
-                other_n_brands=params.get("other_n_brands", 5),
+                top_n_brands=top_n_brands,
+                other_n_brands=other_n_brands,
                 other_min_pct=params.get("other_min_pct", 1.0),
                 name_maxlen=params.get("name_maxlen", 15),
             )
-            if engine_result.get("found"):
-                result = {
-                    "brand_query_name": engine_result["brand_query_name"],
-                    "brand_segment_name": engine_result["brand_segment_name"],
-                    "matching_shops_count": engine_result["matching_shops_count"],
-                    "shops_shown": engine_result["shops_shown"],
-                    "pivot_table": engine_result["pivot_rows"],
-                }
-            else:
-                result = engine_result
+            if not engine_result.get("found"):
+                return f"❌ {engine_result.get('message', 'Data nahi mila.')}"
+
+            seg_name = engine_result["brand_segment_name"]
+            brand_short = resolve_brand_name(brand_name)  # already resolved; used for label only
+            headers = ["🏪 Shop", f"📦 {seg_name} - Sale @ Shop", "📦 Brand - Shop Seg %"]
+            for i in range(1, top_n_brands + 1):
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "🏅")
+                headers.append(f"{medal} Top {i}")
+            headers.append(f"📊 Total (Top1-{top_n_brands})")
+            for i in range(1, other_n_brands + 1):
+                headers.append(f"🔹 Brand {i}")
+            headers.append(f"📊 Total (Brand1-{other_n_brands})")
+
+            lines = [
+                f"**📌 Brand Query Name:** {engine_result['brand_query_name']}",
+                "",
+                f"**🏷️ Brand Segment Name:** {seg_name}",
+                "",
+                f"**🔢 Matching Shops (Total):** {engine_result['matching_shops_count']}",
+                "",
+                f"**👁️ Shops Shown:** {engine_result['shops_shown']}",
+                "",
+                "| " + " | ".join(headers) + " |",
+                "| " + " | ".join("---" for _ in headers) + " |",
+            ]
+            for row in engine_result["pivot_rows"]:
+                cells = [
+                    row["shop"],
+                    str(row["segment_sale_at_shop"]),
+                    row["brand_query_shop_seg_pct"],
+                ]
+                for i in range(1, top_n_brands + 1):
+                    cells.append(row.get(f"top_{i}", "-"))
+                cells.append(row["total_top_n"])
+                for i in range(1, other_n_brands + 1):
+                    cells.append(row.get(f"brand_{i}", "-"))
+                cells.append(row["total_other_n"])
+                lines.append("| " + " | ".join(cells) + " |")
+            return "\n".join(lines)
 
         elif intent == "brand_transaction_count_analysis":
             brand_name = resolve_brand_name(params["brand_name"])
