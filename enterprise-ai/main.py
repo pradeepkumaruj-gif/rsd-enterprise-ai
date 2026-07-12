@@ -459,7 +459,62 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     aur usi shop pe 8PM ki sale/status kya hai market share % ke saath" -- yeh EXACTLY is intent
     ka case hai.
 
-Agar sawaal upar ke kisi specific intent (2-23) se match nahi karta, "generic" use karo.
+24. "brand_transaction_count_analysis" -- kisi brand ki EXACTLY N transactions (orders/rows) wali
+    shops dhoondo -- QUANTITY (boxes) NAHI, ORDERS ki GINTI. Jaise "Royal Ace sirf EK baar gaya
+    is shop mein, phir kabhi nahi" -- yeh transaction count hai, sale qty nahi.
+    params: {{"brand_name": "...", "target_count": 1, "comparison": "equal",
+    "show_segment_top_brands": false, "top_n_shops": 10, "top_n_brands": 5}}
+    "comparison" ho sakta hai: "equal" (exactly N baar), "less_equal" (N ya usse kam baar),
+    "greater_equal" (N ya usse zyada baar). Default "equal", default target_count 1.
+    "show_segment_top_brands": true -- jab user un shops mein bhi brand ke APNE bd_segment ke
+    top brands (naam + sale qty) chahe -- "un shops mein Royal Ace segment ke top 5 brands
+    naam ke saath sale qty batao". "top_n_shops" limit karta hai kitni shops ka detail dikhega
+    (kyunki matching shops 100+ ho sakti hain -- top_n_shops sirf DISPLAY ke liye hai,
+    matching_shops_count mein hamesha SAARI matching shops ka total count milega).
+    ⚠️ Sab numbers (target_count, top_n_shops, top_n_brands) DEFAULT values hain, FIXED nahi --
+    user jo bhi number bole, wahi use karo.
+    Trigger: "Royal Ace kin shops mein sirf ek hi baar gaya hai, dobara kabhi nahi" (-> target_count:
+    1, comparison: "equal"), "Dennis 3 se kam transactions wali shops mein" (-> target_count: 3,
+    comparison: "less_equal"), "Royal Ace jin shops mein ek baar gaya, un shop per Royal Ace
+    segment ke top 5 selling brands name with sale qty" (-> show_segment_top_brands: true,
+    top_n_brands: 5)
+
+25. "brand_transaction_count_pivot_view" -- SAME as brand_transaction_count_analysis (transaction
+    count filter par shops dhoondna), lekin output EXCEL-PIVOT jaisa WIDE table hai: EK ROW PER
+    SHOP, aur us brand ki apni qty/segment-share, PLUS top-N brands, PLUS "other" brands (jo
+    top-N ke baad aate hain, lekin phir bhi shop ke segment ka kam se kam ek minimum % share
+    rakhte hain) -- sab ALAG COLUMNS mein, chhota naam + qty/% ek hi cell mein.
+    params: {{"brand_name": "...", "target_count": 1, "comparison": "equal", "top_n_shops": 10,
+    "top_n_brands": 3, "other_n_brands": 5, "other_min_pct": 1.0, "name_maxlen": 15}}
+    "other_min_pct" -- minimum % threshold (default 1.0%) jo "other" brands ko qualify karne ke
+    liye chahiye (top-N ke baad wale brands mein se). Agar kam brands qualify karte hain,
+    kam hi dikhenge (5 se kam bhi ho sakta hai) -- yeh normal hai.
+    ⚠️ Sab numbers (top_n_shops, top_n_brands, other_n_brands, other_min_pct) DEFAULT values
+    hain, FIXED nahi -- user jo bhi number bole, wahi use karo.
+    Trigger: "Royal Ace jin shops mein ek baar gaya, un shop mein top [N] brands aur baaki other
+    brands jinka shop segment share >= [X]% hai (max [M]), sab ek wide table mein dikhao" --
+    [N], [X], [M] hamesha user ke exact bole hue numbers hain.
+
+26. "brand_transaction_count_shopwise_tables" -- SAME logic as brand_transaction_count_pivot_view
+    (transaction count filter), lekin output ALAG hai: EK CHHOTA TABLE PER SHOP (na ki ek bada
+    combined table). Har shop ke apne top/other brands ke ACTUAL NAAM us table ke COLUMN HEADERS
+    mein hote hain (kyunki har shop ke top brands alag hote hain, isliye ek shared table mein
+    real naam headers mein dalna possible nahi hai).
+    params: {{"brand_name": "...", "target_count": 1, "comparison": "equal", "top_n_shops": 10,
+    "top_n_brands": 3, "other_n_brands": 5, "other_min_pct": 1.0, "name_maxlen": 15}}
+    ⚠️ IMPORTANT -- SAARE numbers (top_n_shops, top_n_brands, other_n_brands, other_min_pct,
+    target_count) FIXED NAHI HAIN -- yeh sirf DEFAULT values hain jab user kuch na bole. Jo
+    bhi number user apne sawaal mein bole (jaise "top 5", "sirf 2 baar", "0.5% se zyada",
+    "20 shops dikhao"), WAHI EXACT number use karo, defaults ko IGNORE karo. Kabhi bhi khud se
+    "3" ya "5" jaisa fixed number mat maan lo -- hamesha user ke bole hue exact number dhoondo.
+    USE THIS jab user "har shop ka alag table" ya "brand naam header mein" jaisa kuch bole --
+    agar user sirf ek generic combined table chahe (Top 1/Top 2/Brand 1/Brand 2 jaise generic
+    column names ke saath), "brand_transaction_count_pivot_view" use karo iske bajaye.
+    Trigger: "Royal Ace jin shops mein sirf ek baar gaya, un shops ka shop-wise table dikhao --
+    top [N] aur other brands (shop segment >=[X]%) unke actual naam ke saath, har shop ka alag
+    table" -- [N] aur [X] hamesha user ke diye hue exact numbers hain, kabhi fixed nahi.
+
+Agar sawaal upar ke kisi specific intent (2-26) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -657,6 +712,29 @@ FIELD_DISPLAY_LABELS = {
     'absent_count': '❌ Absent Count (Zero Sale)',
     'absent_items': '❌ Zero-Sale Items',
     'shop_name': '🏪 Shop Name',
+    'transaction_count': '🔢 Transaction Count',
+    'months': '📅 Month(s)',
+    'target_transaction_count': '🎯 Target Count',
+    'matching_shops_count': '🔢 Matching Shops (Total)',
+    'shops_shown': '👁️ Shops Shown',
+    'pivot_table': '📊 Pivot Table',
+    'shop': '🏪 Shop',
+    'brand_qty_shop_seg_pct': '📦 Qty / Shop Seg %',
+    'top_1': '🥇 Top 1',
+    'top_2': '🥈 Top 2',
+    'top_3': '🥉 Top 3',
+    'top_4': '🏅 Top 4',
+    'top_5': '🏅 Top 5',
+    'brand_query_name': '📌 Brand Query Name',
+    'brand_segment_name': '🏷️ Brand Segment Name',
+    'brand_query_shop_seg_pct': '📦 Brand - Shop Seg %',
+    'brand_1': '🔹 Brand 1',
+    'brand_2': '🔹 Brand 2',
+    'brand_3': '🔹 Brand 3',
+    'brand_4': '🔹 Brand 4',
+    'brand_5': '🔹 Brand 5',
+    'top_brands_at_each_shop': '📊 Top Brands at Each Shop',
+    'rank_in_segment': '🏆 Rank in Segment',
     'hero_brand_in_segment': '👑 Hero Brand (Same Segment)',
     'hero_brand_qty': '📦 Hero Brand Qty',
     'row_dimension': '📊 Row Dimension',
@@ -1405,6 +1483,88 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             result = engine.dimension_breakdown_report(
                 resolved_filters, breakdown_col, top_n=params.get("top_n", 5)
             )
+
+        elif intent == "brand_transaction_count_shopwise_tables":
+            brand_name = resolve_brand_name(params["brand_name"])
+            engine_result = engine.brand_transaction_count_shopwise_tables(
+                brand_name,
+                target_count=params.get("target_count", 1),
+                comparison=params.get("comparison", "equal"),
+                top_n_shops=params.get("top_n_shops", 10),
+                top_n_brands=params.get("top_n_brands", 3),
+                other_n_brands=params.get("other_n_brands", 5),
+                other_min_pct=params.get("other_min_pct", 1.0),
+                name_maxlen=params.get("name_maxlen", 15),
+            )
+            if not engine_result.get("found"):
+                return f"❌ {engine_result.get('message', 'Data nahi mila.')}"
+
+            lines = [
+                f"**📌 Brand Query Name:** {engine_result['brand_query_name']}",
+                "",
+                f"**🏷️ Brand Segment Name:** {engine_result['brand_segment_name']}",
+                "",
+                f"**🔢 Matching Shops (Total):** {engine_result['matching_shops_count']}",
+                "",
+                f"**👁️ Shops Shown:** {engine_result['shops_shown']}",
+                "",
+            ]
+            for block in engine_result["blocks"]:
+                lines.append(f"### 🏪 {block['shop_name']}")
+                lines.append("")
+                lines.append("| " + " | ".join(block["headers"]) + " |")
+                lines.append("| " + " | ".join("---" for _ in block["headers"]) + " |")
+                lines.append("| " + " | ".join(block["values"]) + " |")
+                lines.append("")
+            return "\n".join(lines)
+
+        elif intent == "brand_transaction_count_pivot_view":
+            brand_name = resolve_brand_name(params["brand_name"])
+            engine_result = engine.brand_transaction_count_pivot_view(
+                brand_name,
+                target_count=params.get("target_count", 1),
+                comparison=params.get("comparison", "equal"),
+                top_n_shops=params.get("top_n_shops", 10),
+                top_n_brands=params.get("top_n_brands", 3),
+                other_n_brands=params.get("other_n_brands", 5),
+                other_min_pct=params.get("other_min_pct", 1.0),
+                name_maxlen=params.get("name_maxlen", 15),
+            )
+            if engine_result.get("found"):
+                result = {
+                    "brand_query_name": engine_result["brand_query_name"],
+                    "brand_segment_name": engine_result["brand_segment_name"],
+                    "matching_shops_count": engine_result["matching_shops_count"],
+                    "shops_shown": engine_result["shops_shown"],
+                    "pivot_table": engine_result["pivot_rows"],
+                }
+            else:
+                result = engine_result
+
+        elif intent == "brand_transaction_count_analysis":
+            brand_name = resolve_brand_name(params["brand_name"])
+            engine_result = engine.brand_transaction_count_analysis(
+                brand_name,
+                target_count=params.get("target_count", 1),
+                comparison=params.get("comparison", "equal"),
+                show_segment_top_brands=params.get("show_segment_top_brands", False),
+                top_n_shops=params.get("top_n_shops", 10),
+                top_n_brands=params.get("top_n_brands", 5),
+            )
+            if engine_result.get("found"):
+                if engine_result.get("rows") is not None:
+                    result = {
+                        "brand": engine_result["brand"],
+                        "matching_shops_count": engine_result["matching_shops_count"],
+                        "shops_shown": engine_result["shops_shown"],
+                        "top_brands_at_each_shop": engine_result["rows"],
+                    }
+                elif engine_result.get("shops"):
+                    return engine_result["shops"]
+                else:
+                    result = engine_result
+            else:
+                result = engine_result
 
         elif intent == "zero_presence_analysis":
             filter_col = DIMENSIONS.get(params.get("filter_dimension"))

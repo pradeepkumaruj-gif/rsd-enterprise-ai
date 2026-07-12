@@ -730,6 +730,236 @@ class SmartQueryEngine:
         }
 
     # ------------------------------------------------------------------
+    # z) Transaction-count analysis -- shops where a brand appeared in
+    #    EXACTLY N transactions (rows), not N boxes. E.g. "Royal Ace sold
+    #    only ONCE at this shop, never again" -- a completely different
+    #    concept from sale QUANTITY, which every other function tracks.
+    # ------------------------------------------------------------------
+    def brand_transaction_count_analysis(self, brand_name: str, target_count: int = 1,
+                                          comparison: str = 'equal', show_segment_top_brands: bool = False,
+                                          top_n_shops: int = 10, top_n_brands: int = 5):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        txn_counts = sub.groupby(['shop_code', 'shop_name_as_per_company_data']).size()
+
+        if comparison == 'less_equal':
+            matched = txn_counts[txn_counts <= target_count]
+        elif comparison == 'greater_equal':
+            matched = txn_counts[txn_counts >= target_count]
+        else:
+            matched = txn_counts[txn_counts == target_count]
+
+        total_matching = len(matched)
+
+        if show_segment_top_brands:
+            # For each (capped) matching shop, show the top N brands within
+            # the SAME bd_segment as brand_name -- answers "at these
+            # one-time shops, who's actually winning this category?"
+            own_bd_segment = sub['bd_segment'].unique()
+            segment_df = df[df['bd_segment'].isin(own_bd_segment)]
+            rows = []
+            for (shop_code, shop_name), count in list(matched.items())[:top_n_shops]:
+                brand_qty = int(sub[sub['shop_code'] == shop_code]['sale_qty_in_box'].sum())
+                shop_segment_df = segment_df[segment_df['shop_code'] == shop_code]
+                top_here = (shop_segment_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                            .sum().sort_values(ascending=False).head(top_n_brands))
+                for rank, (other_brand, other_qty) in enumerate(top_here.items(), start=1):
+                    rows.append({
+                        'shop_code': shop_code,
+                        'shop_name': shop_name,
+                        'transaction_count': int(count),
+                        f'{brand_name}_qty': brand_qty,
+                        'rank_in_segment': rank,
+                        'top_brand_here': other_brand,
+                        'top_brand_qty': int(other_qty),
+                    })
+            return {
+                'found': True,
+                'brand': brand_name,
+                'target_transaction_count': target_count,
+                'comparison': comparison,
+                'matching_shops_count': total_matching,
+                'shops_shown': min(top_n_shops, total_matching),
+                'rows': rows,
+            }
+
+        rows = []
+        for (shop_code, shop_name), count in matched.items():
+            shop_txns = sub[sub['shop_code'] == shop_code]
+            rows.append({
+                'shop_code': shop_code,
+                'shop_name': shop_name,
+                'transaction_count': int(count),
+                'total_qty': int(shop_txns['sale_qty_in_box'].sum()),
+                'months': ', '.join(sorted(shop_txns['month'].unique())),
+            })
+
+        return {
+            'found': True,
+            'brand': brand_name,
+            'target_transaction_count': target_count,
+            'comparison': comparison,
+            'matching_shops_count': len(rows),
+            'shops': rows[:50],  # cap for readable display
+        }
+
+    # ------------------------------------------------------------------
+    # aa) Pivot-style view: for shops matching a transaction-count filter,
+    #    ONE ROW PER SHOP, with the brand's own qty/segment-share, PLUS
+    #    top-N and bottom-N brands (short name + qty/share) as separate
+    #    columns -- an Excel-pivot-style wide table.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _short_brand_name(name: str, maxlen: int = 15) -> str:
+        if len(name) <= maxlen:
+            return name
+        truncated = name[:maxlen]
+        if ' ' in truncated:
+            truncated = truncated.rsplit(' ', 1)[0]
+        return truncated + '..'
+
+    def brand_transaction_count_pivot_view(self, brand_name: str, target_count: int = 1,
+                                            comparison: str = 'equal', top_n_shops: int = 10,
+                                            top_n_brands: int = 3, other_n_brands: int = 5,
+                                            other_min_pct: float = 1.0, name_maxlen: int = 15):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        txn_counts = sub.groupby(['shop_code', 'shop_name_as_per_company_data']).size()
+        if comparison == 'less_equal':
+            matched = txn_counts[txn_counts <= target_count]
+        elif comparison == 'greater_equal':
+            matched = txn_counts[txn_counts >= target_count]
+        else:
+            matched = txn_counts[txn_counts == target_count]
+
+        total_matching = len(matched)
+        own_bd_segment = sub['bd_segment'].unique()
+        segment_df = df[df['bd_segment'].isin(own_bd_segment)]
+
+        rows = []
+        for (shop_code, shop_name), _count in list(matched.items())[:top_n_shops]:
+            shop_seg_df = segment_df[segment_df['shop_code'] == shop_code]
+            shop_seg_total = int(shop_seg_df['sale_qty_in_box'].sum())
+            brand_qty = int(sub[sub['shop_code'] == shop_code]['sale_qty_in_box'].sum())
+            brand_pct = round(brand_qty / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+
+            ranked = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                      .sum().sort_values(ascending=False))
+            top_n = ranked.head(top_n_brands)
+
+            # "Other brands" -- everything AFTER the top-N, that still has at
+            # least `other_min_pct`% share of this shop's segment (so we
+            # only show brands that are genuinely significant here, not
+            # truly tiny/bottom performers).
+            remaining = ranked.iloc[top_n_brands:]
+            if shop_seg_total:
+                remaining_pct = (remaining / shop_seg_total * 100)
+                qualifying = remaining[remaining_pct >= other_min_pct].head(other_n_brands)
+            else:
+                qualifying = remaining.head(0)
+
+            row = {
+                'shop': shop_name,
+                'brand_query_shop_seg_pct': f"{brand_qty} / {brand_pct}%",
+            }
+            for i, (b, q) in enumerate(top_n.items(), 1):
+                pct = round(int(q) / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+                row[f'top_{i}'] = f"{self._short_brand_name(b, name_maxlen)}: {int(q)}/{pct}%"
+            for i in range(1, other_n_brands + 1):
+                if i <= len(qualifying):
+                    b, q = list(qualifying.items())[i - 1]
+                    pct = round(int(q) / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+                    row[f'brand_{i}'] = f"{self._short_brand_name(b, name_maxlen)}: {int(q)}/{pct}%"
+                else:
+                    row[f'brand_{i}'] = "-"
+            rows.append(row)
+
+        canonical_segment = own_bd_segment[0] if len(own_bd_segment) else ''
+        return {
+            'found': True,
+            'brand_query_name': brand_name,
+            'brand_segment_name': canonical_segment,
+            'matching_shops_count': total_matching,
+            'shops_shown': min(top_n_shops, total_matching),
+            'pivot_rows': rows,
+        }
+
+    # ------------------------------------------------------------------
+    # ab) Shop-wise SEPARATE tables: same data as
+    #    brand_transaction_count_pivot_view, but ONE SMALL TABLE PER SHOP
+    #    instead of one big table -- because each shop's top/other brands
+    #    are DIFFERENT, so brand names can be used as the actual COLUMN
+    #    HEADERS (impossible to do that cleanly in a single shared table).
+    # ------------------------------------------------------------------
+    def brand_transaction_count_shopwise_tables(self, brand_name: str, target_count: int = 1,
+                                                 comparison: str = 'equal', top_n_shops: int = 10,
+                                                 top_n_brands: int = 3, other_n_brands: int = 5,
+                                                 other_min_pct: float = 1.0, name_maxlen: int = 15):
+        df = self.df
+        sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+        if sub.empty:
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        txn_counts = sub.groupby(['shop_code', 'shop_name_as_per_company_data']).size()
+        if comparison == 'less_equal':
+            matched = txn_counts[txn_counts <= target_count]
+        elif comparison == 'greater_equal':
+            matched = txn_counts[txn_counts >= target_count]
+        else:
+            matched = txn_counts[txn_counts == target_count]
+
+        total_matching = len(matched)
+        own_bd_segment = sub['bd_segment'].unique()
+        segment_df = df[df['bd_segment'].isin(own_bd_segment)]
+        canonical_segment = own_bd_segment[0] if len(own_bd_segment) else ''
+        brand_short = self._short_brand_name(brand_name, name_maxlen)
+
+        blocks = []
+        for (shop_code, shop_name), _count in list(matched.items())[:top_n_shops]:
+            shop_seg_df = segment_df[segment_df['shop_code'] == shop_code]
+            shop_seg_total = int(shop_seg_df['sale_qty_in_box'].sum())
+            brand_qty = int(sub[sub['shop_code'] == shop_code]['sale_qty_in_box'].sum())
+            brand_pct = round(brand_qty / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+
+            ranked = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                      .sum().sort_values(ascending=False))
+            top_n = ranked.head(top_n_brands)
+            remaining = ranked.iloc[top_n_brands:]
+            if shop_seg_total:
+                remaining_pct = remaining / shop_seg_total * 100
+                qualifying = remaining[remaining_pct >= other_min_pct].head(other_n_brands)
+            else:
+                qualifying = remaining.head(0)
+
+            headers = ['Shop', f'{brand_short} - Shop Seg %']
+            values = [shop_name, f"{brand_qty} / {brand_pct}%"]
+            for b, q in top_n.items():
+                pct = round(int(q) / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+                headers.append(self._short_brand_name(b, name_maxlen))
+                values.append(f"{int(q)} / {pct}%")
+            for b, q in qualifying.items():
+                pct = round(int(q) / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+                headers.append(self._short_brand_name(b, name_maxlen))
+                values.append(f"{int(q)} / {pct}%")
+
+            blocks.append({'shop_name': shop_name, 'headers': headers, 'values': values})
+
+        return {
+            'found': True,
+            'brand_query_name': brand_name,
+            'brand_segment_name': canonical_segment,
+            'matching_shops_count': total_matching,
+            'shops_shown': min(top_n_shops, total_matching),
+            'blocks': blocks,
+        }
+
+    # ------------------------------------------------------------------
     # v) GAP #7: Zero-presence analysis -- given a filter (e.g. a company),
     #    find ALL values of a "universe" dimension (e.g. all shops) where
     #    that filter has ZERO sales -- true absence across the FULL
