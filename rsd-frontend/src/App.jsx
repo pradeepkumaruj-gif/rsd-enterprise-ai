@@ -298,9 +298,10 @@ export default function App() {
       const data = await response.json()
       setLoading(false)
       const aiId = Date.now()
+      const downloadTable = data.download_table || null
       streamResponse(data.reply, (fullText) => {
         setChats(prev => prev.map(ch =>
-          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: aiId, role: "assistant", content: fullText }] }
+          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: aiId, role: "assistant", content: fullText, downloadTable }] }
         ))
       })
     } catch (error) {
@@ -488,7 +489,7 @@ export default function App() {
                           {copiedId === m.id ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
                         </button>
 
-                        {hasTable(m.content) && (
+                        {(m.downloadTable || hasTable(m.content)) && (
                           <>
                             <button onClick={() => setDownloadMenuId(downloadMenuId === m.id ? null : m.id)} style={{
                               background: "transparent", border: "none", cursor: "pointer",
@@ -498,7 +499,8 @@ export default function App() {
                               onMouseEnter={e => e.currentTarget.style.opacity = 1}
                               onMouseLeave={e => e.currentTarget.style.opacity = 0.7}
                             >
-                              <Download size={12} /> Download
+                              <Download size={12} />
+                              {m.downloadTable ? `Download (${m.downloadTable.rows.length} rows)` : "Download"}
                             </button>
 
                             {downloadMenuId === m.id && (
@@ -515,7 +517,13 @@ export default function App() {
                                     { label: "PDF", icon: <FileDown size={13} />, fn: exportToPDF },
                                   ].map(opt => (
                                     <button key={opt.label} onClick={() => {
-                                      opt.fn(parseMarkdownTables(m.content), `RSD-Report-${m.id}`)
+                                      // Prefer the FULL structured dataset from the backend
+                                      // (covers ALL matching rows) over re-parsing whatever
+                                      // truncated table is visible in the chat text.
+                                      const tables = m.downloadTable
+                                        ? [{ headers: m.downloadTable.headers, rows: m.downloadTable.rows }]
+                                        : parseMarkdownTables(m.content)
+                                      opt.fn(tables, `RSD-Report-${m.id}`)
                                       setDownloadMenuId(null)
                                     }} style={{
                                       width: "100%", padding: "9px 14px", background: "transparent", border: "none",
