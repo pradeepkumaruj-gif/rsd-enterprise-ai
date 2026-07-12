@@ -472,7 +472,10 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     (kyunki matching shops 100+ ho sakti hain -- top_n_shops sirf DISPLAY ke liye hai,
     matching_shops_count mein hamesha SAARI matching shops ka total count milega).
     ⚠️ Sab numbers (target_count, top_n_shops, top_n_brands) DEFAULT values hain, FIXED nahi --
-    user jo bhi number bole, wahi use karo.
+    user jo bhi number bole, wahi use karo. Default "top_n_shops" 10 hi rakho -- agar user
+    "full report"/"sab shops"/"poori list" bole, "top_n_shops": 50 rakho (yeh screen-readable
+    max hai). Agar matching shops 50 se zyada hain, result mein total count dikhega, aur user
+    Download button se poori list Excel/CSV mein nikaal sakta hai jo bhi screen pe dikhe uska.
     Trigger: "Royal Ace kin shops mein sirf ek hi baar gaya hai, dobara kabhi nahi" (-> target_count:
     1, comparison: "equal"), "Dennis 3 se kam transactions wali shops mein" (-> target_count: 3,
     comparison: "less_equal"), "Royal Ace jin shops mein ek baar gaya, un shop per Royal Ace
@@ -491,9 +494,16 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     kam hi dikhenge (5 se kam bhi ho sakta hai) -- yeh normal hai.
     ⚠️ Sab numbers (top_n_shops, top_n_brands, other_n_brands, other_min_pct) DEFAULT values
     hain, FIXED nahi -- user jo bhi number bole, wahi use karo.
+    ⚠️ FULL REPORT -- agar user "full report", "sab shops", "poori list", "saari matching
+    shops", "complete data" jaisa kuch bole (matlab woh sirf top N nahi, MATCHING SAARI shops
+    chahta hai), "top_n_shops": 50 rakho (yeh screen-readable max hai -- zyada rows screen pe
+    dikhana impractical hoga). Agar matching shops 50 se zyada hain, result mein total
+    matching count bhi dikhega. User phir Download button se poori dikhayi gayi list
+    Excel/CSV mein nikaal sakta hai review ke liye.
     Trigger: "Royal Ace jin shops mein ek baar gaya, un shop mein top [N] brands aur baaki other
     brands jinka shop segment share >= [X]% hai (max [M]), sab ek wide table mein dikhao" --
-    [N], [X], [M] hamesha user ke exact bole hue numbers hain.
+    [N], [X], [M] hamesha user ke exact bole hue numbers hain. "...saari matching shops ka full
+    report do" (-> top_n_shops: 50)
 
 26. "brand_transaction_count_shopwise_tables" -- SAME logic as brand_transaction_count_pivot_view
     (transaction count filter), lekin output ALAG hai: EK CHHOTA TABLE PER SHOP (na ki ek bada
@@ -507,6 +517,11 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     bhi number user apne sawaal mein bole (jaise "top 5", "sirf 2 baar", "0.5% se zyada",
     "20 shops dikhao"), WAHI EXACT number use karo, defaults ko IGNORE karo. Kabhi bhi khud se
     "3" ya "5" jaisa fixed number mat maan lo -- hamesha user ke bole hue exact number dhoondo.
+    ⚠️ FULL REPORT -- har shop ka apna ALAG table banta hai yahan, isliye "full report"/"sab
+    shops" ke liye "top_n_shops": 25 hi rakho (zyada se response bahut lamba/impractical ho
+    jayega, kyunki 50 shops = 50 alag tables). Agar user genuinely bahut saari shops (jaise
+    50+) ka full data chahta hai, use "brand_transaction_count_pivot_view" (intent 25) ki
+    taraf guide karo -- woh EK combined table deta hai jo zyada rows ke liye better suited hai.
     USE THIS jab user "har shop ka alag table" ya "brand naam header mein" jaisa kuch bole --
     agar user sirf ek generic combined table chahe (Top 1/Top 2/Brand 1/Brand 2 jaise generic
     column names ke saath), "brand_transaction_count_pivot_view" use karo iske bajaye.
@@ -1490,7 +1505,7 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 brand_name,
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
-                top_n_shops=params.get("top_n_shops", 10),
+                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
                 top_n_brands=params.get("top_n_brands", 3),
                 other_n_brands=params.get("other_n_brands", 5),
                 other_min_pct=params.get("other_min_pct", 1.0),
@@ -1522,11 +1537,12 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             brand_name = resolve_brand_name(params["brand_name"])
             top_n_brands = params.get("top_n_brands", 3)
             other_n_brands = params.get("other_n_brands", 5)
+            DISPLAY_CAP = 20  # on-screen readability cap; download gets the FULL computed set
             engine_result = engine.brand_transaction_count_pivot_view(
                 brand_name,
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
-                top_n_shops=params.get("top_n_shops", 10),
+                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
                 top_n_brands=top_n_brands,
                 other_n_brands=other_n_brands,
                 other_min_pct=params.get("other_min_pct", 1.0),
@@ -1536,15 +1552,35 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 return f"❌ {engine_result.get('message', 'Data nahi mila.')}"
 
             seg_name = engine_result["brand_segment_name"]
-            brand_short = resolve_brand_name(brand_name)  # already resolved; used for label only
-            headers = ["🏪 Shop", f"📦 {seg_name} - Sale @ Shop", "📦 Brand - Shop Seg %"]
+            headers = ["Shop", f"{seg_name} - Sale @ Shop", "Brand - Shop Seg %"]
+            for i in range(1, top_n_brands + 1):
+                headers.append(f"Top {i}")
+            headers.append(f"Total (Top1-{top_n_brands})")
+            for i in range(1, other_n_brands + 1):
+                headers.append(f"Brand {i}")
+            headers.append(f"Total (Brand1-{other_n_brands})")
+
+            def _row_to_cells(row):
+                cells = [row["shop"], str(row["segment_sale_at_shop"]), row["brand_query_shop_seg_pct"]]
+                for i in range(1, top_n_brands + 1):
+                    cells.append(row.get(f"top_{i}", "-"))
+                cells.append(row["total_top_n"])
+                for i in range(1, other_n_brands + 1):
+                    cells.append(row.get(f"brand_{i}", "-"))
+                cells.append(row["total_other_n"])
+                return cells
+
+            all_rows = engine_result["pivot_rows"]
+            display_rows = all_rows[:DISPLAY_CAP]
+
+            display_headers = ["🏪 Shop", f"📦 {seg_name} - Sale @ Shop", "📦 Brand - Shop Seg %"]
             for i in range(1, top_n_brands + 1):
                 medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "🏅")
-                headers.append(f"{medal} Top {i}")
-            headers.append(f"📊 Total (Top1-{top_n_brands})")
+                display_headers.append(f"{medal} Top {i}")
+            display_headers.append(f"📊 Total (Top1-{top_n_brands})")
             for i in range(1, other_n_brands + 1):
-                headers.append(f"🔹 Brand {i}")
-            headers.append(f"📊 Total (Brand1-{other_n_brands})")
+                display_headers.append(f"🔹 Brand {i}")
+            display_headers.append(f"📊 Total (Brand1-{other_n_brands})")
 
             lines = [
                 f"**📌 Brand Query Name:** {engine_result['brand_query_name']}",
@@ -1553,25 +1589,23 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 "",
                 f"**🔢 Matching Shops (Total):** {engine_result['matching_shops_count']}",
                 "",
-                f"**👁️ Shops Shown:** {engine_result['shops_shown']}",
+                f"**👁️ Shops Shown (Screen):** {len(display_rows)}"
+                + (f" — ⬇️ poori {len(all_rows)} shops ka data Download button se milega"
+                   if len(all_rows) > len(display_rows) else ""),
                 "",
-                "| " + " | ".join(headers) + " |",
-                "| " + " | ".join("---" for _ in headers) + " |",
+                "| " + " | ".join(display_headers) + " |",
+                "| " + " | ".join("---" for _ in display_headers) + " |",
             ]
-            for row in engine_result["pivot_rows"]:
-                cells = [
-                    row["shop"],
-                    str(row["segment_sale_at_shop"]),
-                    row["brand_query_shop_seg_pct"],
-                ]
-                for i in range(1, top_n_brands + 1):
-                    cells.append(row.get(f"top_{i}", "-"))
-                cells.append(row["total_top_n"])
-                for i in range(1, other_n_brands + 1):
-                    cells.append(row.get(f"brand_{i}", "-"))
-                cells.append(row["total_other_n"])
-                lines.append("| " + " | ".join(cells) + " |")
-            return "\n".join(lines)
+            for row in display_rows:
+                lines.append("| " + " | ".join(_row_to_cells(row)) + " |")
+
+            return {
+                "__reply__": "\n".join(lines),
+                "__download_table__": {
+                    "headers": headers,
+                    "rows": [_row_to_cells(row) for row in all_rows],
+                },
+            }
 
         elif intent == "brand_transaction_count_analysis":
             brand_name = resolve_brand_name(params["brand_name"])
@@ -1580,7 +1614,7 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 target_count=params.get("target_count", 1),
                 comparison=params.get("comparison", "equal"),
                 show_segment_top_brands=params.get("show_segment_top_brands", False),
-                top_n_shops=params.get("top_n_shops", 10),
+                top_n_shops=min(params.get("top_n_shops", 10), 200),  # hard safety cap
                 top_n_brands=params.get("top_n_brands", 5),
             )
             if engine_result.get("found"):
@@ -1882,6 +1916,14 @@ def chat(request: ChatRequest):
         data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
                 "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")
 
+    # Some intents need a SMALLER table on-screen (readability) but the
+    # FULL matching dataset available for download -- they signal this by
+    # returning a special dict instead of a plain string/list/dict.
+    download_table = None
+    if isinstance(data, dict) and "__reply__" in data:
+        download_table = data.get("__download_table__")
+        data = data["__reply__"]
+
     # CRITICAL: the table/numbers are built here, in pure Python, from the
     # actual data -- never by asking an LLM to "re-type" or "format" them.
     # An LLM transcribing a table can occasionally alter a digit, which is
@@ -1926,4 +1968,7 @@ def chat(request: ChatRequest):
         insight = ""
 
     final_reply = deterministic_text if not insight else f"{deterministic_text}\n\n{insight}"
-    return {"reply": final_reply}
+    response = {"reply": final_reply}
+    if download_table:
+        response["download_table"] = download_table
+    return response
