@@ -494,12 +494,18 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     kam hi dikhenge (5 se kam bhi ho sakta hai) -- yeh normal hai.
     ⚠️ Sab numbers (top_n_shops, top_n_brands, other_n_brands, other_min_pct) DEFAULT values
     hain, FIXED nahi -- user jo bhi number bole, wahi use karo.
-    ⚠️ FULL REPORT -- agar user "full report", "sab shops", "poori list", "saari matching
+    ⚠️ FULL REPORT -- agar user "full report", "sab SHOPS", "poori list", "saari matching
     shops", "complete data" jaisa kuch bole (matlab woh sirf top N nahi, MATCHING SAARI shops
     chahta hai), "top_n_shops": 50 rakho (yeh screen-readable max hai -- zyada rows screen pe
     dikhana impractical hoga). Agar matching shops 50 se zyada hain, result mein total
     matching count bhi dikhega. User phir Download button se poori dikhayi gayi list
     Excel/CSV mein nikaal sakta hai review ke liye.
+    ⚠️ CRITICAL DISAMBIGUATION -- "sab EK [table/row] mein" (jaise "top brands aur other brands
+    SAB EK wide table mein dikhao") ka matlab hai "yeh saari COLUMNS/BRANDS ko ek hi table mein
+    combine karo" -- yeh FORMAT instruction hai, "sab shops" wala trigger NAHI hai. Yahan "sab"
+    ka target hai brands/columns, shops NAHI. Is case mein "top_n_shops" DEFAULT (10) hi rakho,
+    50 mat karo -- sirf tab 50 karo jab user explicitly "sab SHOPS" ya "poori SHOPS ki list"
+    jaisa bole (shops ke context mein "sab", na ki table-format ke context mein).
     Trigger: "Royal Ace jin shops mein ek baar gaya, un shop mein top [N] brands aur baaki other
     brands jinka shop segment share >= [X]% hai (max [M]), sab ek wide table mein dikhao" --
     [N], [X], [M] hamesha user ke exact bole hue numbers hain. "...saari matching shops ka full
@@ -528,6 +534,14 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     Trigger: "Royal Ace jin shops mein sirf ek baar gaya, un shops ka shop-wise table dikhao --
     top [N] aur other brands (shop segment >=[X]%) unke actual naam ke saath, har shop ka alag
     table" -- [N] aur [X] hamesha user ke diye hue exact numbers hain, kabhi fixed nahi.
+
+⚠️ NOTE -- INTENTS 24, 25, 26 (transaction-count wale saare) bhi UNIVERSAL "month_filter" field
+ke saath kaam karte hain (upar JSON schema mein define kiya gaya hai) -- yeh koi alag cheez nahi
+hai, sirf top-level "month_filter" field normally jaisa hi use karo. Agar user "April mein" ya
+"sirf May ke liye" jaisa bole in intents ke saath, "month_filter" bhi zaroor bhejo.
+Trigger: "April mein Royal Ace jin shops mein sirf ek baar gaya" (-> intent: 24, month_filter:
+{{"start":"Apr-26","end":"Apr-26"}}), "May mein Royal Ace ka shop-wise table top 3 brands ke
+saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
 
 Agar sawaal upar ke kisi specific intent (2-26) se match nahi karta, "generic" use karo.
 
@@ -1584,6 +1598,17 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 return cells
 
             all_rows = engine_result["pivot_rows"]
+
+            # Sort shops by "Total (Top1-N)" % descending -- largest
+            # concentration-in-top-brands first. Extracted from the
+            # "qty / pct%" string already stored in each row.
+            def _extract_pct(qty_pct_str):
+                try:
+                    return float(qty_pct_str.split('/')[-1].strip().rstrip('%'))
+                except (ValueError, IndexError):
+                    return 0.0
+            all_rows = sorted(all_rows, key=lambda r: _extract_pct(r["total_top_n"]), reverse=True)
+
             display_rows = all_rows[:DISPLAY_CAP]
 
             display_headers = ["🏪 Shop", f"📦 {seg_name} - Sale @ Shop", "📦 Brand - Shop Seg %"]
