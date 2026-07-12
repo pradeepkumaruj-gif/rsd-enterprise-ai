@@ -133,7 +133,7 @@ export default function App() {
     headerCells.forEach((cell, colIdx) => {
       const clean = cell.replace(/\*\*(.*?)\*\*/g, '$1')
       const align = numericCols[colIdx] ? 'right' : 'left'
-      html += `<th style="padding:8px 16px;border-bottom:2px solid ${bdrHead};color:${txt};text-align:${align};font-weight:600;font-size:12.5px;white-space:nowrap">${clean}</th>`
+      html += `<th style="padding:8px 12px;border-bottom:2px solid ${bdrHead};color:${txt};text-align:${align};font-weight:600;font-size:12.5px;white-space:normal;word-wrap:break-word;max-width:140px">${clean}</th>`
     })
     html += '</tr></thead><tbody>'
     bodyRows.forEach((cells, i) => {
