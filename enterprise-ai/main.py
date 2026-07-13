@@ -438,13 +438,15 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     ke APNE bd_segment ke andar wahan ka top-selling brand bhi dikhata hai.
     ⚠️ CRITICAL DISAMBIGUATION -- "show_hero_brand_in_segment" SIRF tab use karo jab user EXACTLY
     EK (1) hero/winner brand maange, KOI NUMBER (N) mention KIYE BINA (jaise "kaun jeet raha hai
-    wahan" -- bina "top N" bole). AGAR user "top N brands", "top 3", "top 5", "top 20" jaisa
-    KISI BHI number ke saath brands maange (chahe N=1 hi kyun na ho, jaise "top 1 brand"), TOH
-    "zero_presence_analysis" BILKUL USE MAT KARO -- seedha "zero_sale_with_top_segment_brands"
-    (intent #27) use karo. Yeh dono ALAG features hain: pehla SIRF 1 hero brand deta hai (koi
-    N nahi), doosra N brands wide columns mein deta hai (TOP 1, TOP 2... TOP N). "with top 3
-    brands", "top 5 brands wahan", "top N performers" -- yeh SAB intent #27 ke trigger hain,
-    is intent (#20) ke NAHI -- chahe phrasing mein "zero sale"/"absent" bhi ho.
+    wahan" -- bina "top/bottom/mid N" bole). AGAR user "top N brands", "bottom N brands", "mid
+    N brands", "top 3", "bottom 5", "mid performer 10" jaisa KISI BHI number ke saath brands
+    maange (TOP ho, BOTTOM ho, ya MID ho -- teeno equally apply hote hain, chahe N=1 hi kyun na
+    ho), TOH "zero_presence_analysis" BILKUL USE MAT KARO -- seedha "zero_sale_with_top_segment_
+    brands" (intent #27) use karo. Yeh dono ALAG features hain: pehla SIRF 1 hero brand deta hai
+    (koi N nahi), doosra N brands wide columns mein deta hai (TOP/BOTTOM/MID 1, 2... N). "with
+    top 3 brands", "bottom 5 brands wahan", "mid performer N wahan" -- yeh SAB intent #27 ke
+    trigger hain, is intent (#20) ke NAHI -- chahe phrasing mein "zero sale"/"absent" bhi ho,
+    aur chahe TOP ho, BOTTOM ho, ya MID ho -- teeno ke liye yehi rule equally lagu hota hai.
     CONCEPT-LEVEL RULE (zyada zaroori hai examples se) -- yeh sirf keyword-matching nahi hai.
     Reasoning yeh karo: "kya user kisi jagah pe TOTAL/COMPLETE ABSENCE (bilkul kuch na hona,
     zero, ghum jaana, koi trace na hona) ke baare mein pooch raha hai, chahe kisi bhi language
@@ -611,11 +613,12 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     segment mein kaun kaun se brand sale ho rahe hain, top 20 brands batao" (-> rank_mode:
     "top"), "...bottom 20 brands batao" (-> rank_mode: "bottom"), "...mid performer 20 brands
     batao" (-> rank_mode: "mid"), "Show me shops where Dennis is absent, with top 3 brands"
-    (-> yeh bhi is intent ka hai, English mein bhi -- "with top 3 brands" seedha rank_mode:
-    "top", top_n: 3 ko trigger karta hai -- yeh "zero_presence_analysis"/hero_brand mein NAHI
-    jayega, chahe N=1 bhi ho ("top 1 brand" bhi is intent mein hi jayega, hero_brand feature
-    mein nahi -- woh feature sirf "kaun jeet raha hai" jaisi phrasing ke liye hai jisme koi
-    number bilkul na ho).
+    (-> rank_mode: "top", top_n: 3), "Show me shops where Dennis is absent, with bottom 5
+    brands" (-> rank_mode: "bottom", top_n: 5), "Where Dennis has zero sale, show mid
+    performer 10 brands there" (-> rank_mode: "mid", top_n: 10) -- teeno English mein bhi is
+    intent ka hai, "zero_presence_analysis"/hero_brand mein NAHI jayega, chahe N=1 bhi ho
+    ("top 1 brand" bhi is intent mein hi jayega, hero_brand feature mein nahi -- woh feature
+    sirf "kaun jeet raha hai" jaisi phrasing ke liye hai jisme koi number bilkul na ho).
     Agar user sirf "zero sale" poochein (bina "top/bottom/mid N brands wahan" ke, aur koi number
     na ho), use "zero_presence_analysis" hi karo -- yeh naya intent SIRF tab jab dono cheezein
     saath poochi jayein (zero-sale shops + wahan kisi NUMBER ke saath top/bottom/mid brands).
@@ -1024,7 +1027,7 @@ def dicts_to_markdown_table(records: list) -> str:
     return "\n".join([header, sep] + rows)
 
 
-DOWNLOAD_DISPLAY_LIMIT = 50
+DOWNLOAD_DISPLAY_LIMIT = 15
 
 
 def extract_download_table(data):
