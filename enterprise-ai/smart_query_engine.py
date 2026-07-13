@@ -1054,7 +1054,7 @@ class SmartQueryEngine:
         if show_hero_brand_in_segment and filter_col == 'brand_name_as_per_company_data' and universe_col == 'shop_code':
             own_bd_segment = df.loc[mask, 'bd_segment'].unique()
             segment_df = df[df['bd_segment'].isin(own_bd_segment)]
-            for item in absent_items[:50]:
+            for item in absent_items:
                 shop_seg_df = segment_df[segment_df['shop_code'] == item['shop_code']]
                 if not shop_seg_df.empty:
                     hero = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
@@ -1073,7 +1073,7 @@ class SmartQueryEngine:
             'total_universe_count': len(all_universe_values),
             'present_count': len(present_universe_values),
             'absent_count': len(absent_values),
-            'absent_items': absent_items[:50],  # cap for readable display
+            'absent_items': absent_items,  # FULL list -- display-truncation happens at the API layer, not here
         }
         return result
 
@@ -1123,7 +1123,7 @@ class SmartQueryEngine:
         col_prefix = rank_mode if rank_mode in ('top', 'bottom', 'mid') else 'top'
 
         rows = []
-        for idx, shop_code in enumerate(absent_shops[:50], start=1):
+        for idx, shop_code in enumerate(absent_shops, start=1):
             shop_seg_df = segment_df[segment_df['shop_code'] == shop_code]
             shop_seg_total = int(shop_seg_df['sale_qty_in_box'].sum())
             full_ranked = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']

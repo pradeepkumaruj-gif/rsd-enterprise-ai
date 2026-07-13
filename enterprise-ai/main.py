@@ -1010,6 +1010,32 @@ def dicts_to_markdown_table(records: list) -> str:
     return "\n".join([header, sep] + rows)
 
 
+DOWNLOAD_DISPLAY_LIMIT = 50
+
+
+def extract_download_table(data):
+    """Finds the largest list-of-dicts value in a result (the 'main table'
+    of the response) and returns it as {headers, rows} with ALL rows (not
+    truncated) -- sent to the frontend separately from the (truncated)
+    display text, so 'Download' can export the FULL dataset (e.g. all 94
+    zero-sale shops) even though the screen only shows 50 for readability.
+    Returns None if there's no table-shaped data to download."""
+    candidates = []
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        candidates.append(data)
+    elif isinstance(data, dict):
+        for value in data.values():
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                candidates.append(value)
+    if not candidates:
+        return None
+    best = max(candidates, key=len)
+    columns = list(best[0].keys())
+    headers = [_pretty_label(c) for c in columns]
+    rows = [[str(r.get(c, "")) for c in columns] for r in best]
+    return {"headers": headers, "rows": rows}
+
+
 def render_data_deterministically(data) -> str:
     """Converts whatever run_query/run_special_intent returned (string,
     list of records, or a result dict) into final display text -- entirely
@@ -1018,7 +1044,7 @@ def render_data_deterministically(data) -> str:
         return data
 
     if isinstance(data, list):
-        return dicts_to_markdown_table(data)
+        return dicts_to_markdown_table(data[:DOWNLOAD_DISPLAY_LIMIT])
 
     if isinstance(data, dict):
         if data.get("found") is False:
@@ -1034,7 +1060,7 @@ def render_data_deterministically(data) -> str:
                 continue
             label = _pretty_label(key)
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(value)}")
+                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(value[:DOWNLOAD_DISPLAY_LIMIT])}")
             elif isinstance(value, dict) and value:
                 # A plain {name: number} dict (e.g. market_share's 'ranking'
                 # field) -- convert to proper table rows instead of dumping
@@ -2042,11 +2068,16 @@ def chat(request: ChatRequest):
 
     # Some intents need a SMALLER table on-screen (readability) but the
     # FULL matching dataset available for download -- they signal this by
-    # returning a special dict instead of a plain string/list/dict.
+    # returning a special dict instead of a plain string/list/dict. For
+    # everything else, generically extract the largest table-shaped field
+    # (full, untruncated) so "Download" always has access to ALL matching
+    # rows, even though the screen only shows DOWNLOAD_DISPLAY_LIMIT.
     download_table = None
     if isinstance(data, dict) and "__reply__" in data:
         download_table = data.get("__download_table__")
         data = data["__reply__"]
+    else:
+        download_table = extract_download_table(data)
 
     # CRITICAL: the table/numbers are built here, in pure Python, from the
     # actual data -- never by asking an LLM to "re-type" or "format" them.
