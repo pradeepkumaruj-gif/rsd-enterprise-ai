@@ -195,6 +195,13 @@ logic already hai (current vs previous automatically), unke saath month_filter m
   do alag tarike se interpret ho sakta hai aur dono equally likely lagte hain. GUESS MAT KARO --
   agar doubt hai, false maro aur "clarification_needed" mein SPECIFIC bata do ki kya unclear tha
   aur user kya clarify kare (Hinglish mein, 1 line).
+  SMART CLARIFICATION -- agar sawaal ka structure BILKUL naya/anjaana hai (jaise koi aisa
+  concept jo humare kisi bhi intent se match nahi karta -- "graph flat line", "trend line
+  dikhao" jaisa kuch), sirf "samajh nahi aaya" mat bolo -- agar tumhe koi PARTIAL guess ban raha
+  hai (jaise "shayad growth/decline poochh rahe ho, ya kisi specific number ke baare mein"),
+  woh guess bhi "clarification_needed" mein include karo taaki user sirf haan/nahi bol sake,
+  poora sawaal dobara na likhna pade. Jaise: "Yeh 'flat line' se aapka matlab hai ki sale same
+  reh gayi (na growth na decline)? Agar haan, brand/period bata do."
 - Jab "query_understood": false ho, baaki saare fields (intent, filters, etc.) ignore kar diye
   jayenge -- unko kuch bhi default value de sakte ho, unka use nahi hoga.
 - Yeh galat guess se BEHTAR hai ki tum clearly bol do "clear nahi hai" -- ek galat-samjha sawaal
@@ -429,10 +436,45 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     hero brand kaun hai (SAME segment mein)" -- sirf tab kaam karta hai jab filter_dimension
     "brand" ho aur universe_dimension "shop_code" ho. Har zero-presence shop ke liye, us brand
     ke APNE bd_segment ke andar wahan ka top-selling brand bhi dikhata hai.
+    CONCEPT-LEVEL RULE (zyada zaroori hai examples se) -- yeh sirf keyword-matching nahi hai.
+    Reasoning yeh karo: "kya user kisi jagah pe TOTAL/COMPLETE ABSENCE (bilkul kuch na hona,
+    zero, ghum jaana, koi trace na hona) ke baare mein pooch raha hai, chahe kisi bhi language
+    (Hindi/English/Urdu/slang/regional) ya kisi bhi word mein ho?" -- agar HAAN, toh yeh intent
+    hai, CHAHE woh exact word neeche ke examples mein na ho. Word-list match mat karo, MEANING
+    samjho -- naya/anjaana word (jaise "nadaarad", "vanish", "gum hai") bhi is concept ko refer
+    kar sakta hai agar context "total absence" ka hi ho.
+    PHRASING SYNONYMS (illustrative examples, EXHAUSTIVE list NAHI hai) -- "sale 0/zero hai
+    kaha", "kaha nahi bikta", "absent kaha hai", "missing kaha hai", "koi presence nahi hai",
+    "gayab hai kaha" (Hindi slang), "available nahi hai kaha", "penetration zero/kam hai kaha",
+    "kin shops mein nahi hai", "kaha sale nahi ho rahi", "kaha bilkul nahi bikta" -- yeh SAB EK
+    HI matlab rakhte hain (zero-presence), inhe alag-alag intents mein mat bhejo, sabko isi
+    "zero_presence_analysis" mein bhejo.
     Trigger: "Rock and Storm ka koi bhi brand kis shop mein sale nahi hota", "Dennis kis shops
     mein bilkul absent hai", "kaunse shops mein OMSONS ka koi presence nahi hai", "Dennis brand
     ka koi bhi Whisky product kis shop codes mein sale nahi hua, aur wahan same segment mein
-    kaun sa brand hero hai" (-> show_hero_brand_in_segment: true)
+    kaun sa brand hero hai" (-> show_hero_brand_in_segment: true), "Dennis ki sale 0 kaha hai",
+    "Dennis kaha nahi bikta", "Dennis gayab hai kin shops mein"
+    ⚠️ DISTINCTION: "sabse KAM sale kaha hai" (jaise "Dennis ki sabse kam sale kaha hai") EK
+    ALAG cheez hai -- yeh "generic" intent hai (sort_desc: false), jo un SHOPS ko dikhata hai
+    jaha brand SABSE KAM (par phir bhi kuch) bikta hai. "zero_presence_analysis" un shops ko
+    dikhata hai jaha brand BILKUL NAHI bikta (0, poori tarah absent). "Kam" aur "zero/absent/
+    nahi bikta/gayab" alag matlab hain -- pehla wala "generic" mein jayega, doosra
+    "zero_presence_analysis" mein.
+    ⚠️ DATA NOT AVAILABLE -- yeh dataset mein NAHI hain, agar user in cheezon ke baare mein
+    pooche, GUESS/MAP mat karo kisi dimension pe -- "query_understood": false karo aur SAAF
+    bata do ki yeh data available nahi hai:
+    - "city", "state", "district", "region" -- yeh dimensions dataset mein EXIST hi nahi karte
+      (poora data sirf Delhi ka hai, ismein city/state/district/region ka breakdown nahi hai).
+      Agar user "kis city/state/district mein zero hai" jaisa poochein, bolo: "Yeh data available
+      nahi hai -- humare paas sirf shop/department/TSE level ka data hai, city/state ka nahi."
+    - "stock", "inventory", "available/availability" (jab STOCK ke context mein bola jaye, jaise
+      "stock hai par sale nahi", "kaha available hai lekin bik nahi raha", "dead stock") -- humare
+      paas SIRF SALES data hai, stock/inventory data BILKUL NAHI hai. "Sale zero hai" aur "stock
+      hai par sale nahi hai" DO ALAG cheezein hain -- pehla hum bata sakte hain, doosra NAHI
+      (kyunki hume pata hi nahi ki shop mein stock tha ya nahi, sirf itna pata hai ki sale hui
+      ya nahi). Agar user stock/availability ke baare mein poochein, bolo: "Yeh humare paas sirf
+      SALES data hai, stock/inventory availability ka data nahi hai -- sirf yeh bata sakta hoon
+      ki sale hui ya nahi."
 
 21. "cross_tab_matrix" -- DO dimensions ka grid/pivot table (Excel pivot jaisa) -- ek dimension
     ROWS mein, doosra COLUMNS mein, sale qty cells mein.
@@ -543,7 +585,28 @@ Trigger: "April mein Royal Ace jin shops mein sirf ek baar gaya" (-> intent: 24,
 {{"start":"Apr-26","end":"Apr-26"}}), "May mein Royal Ace ka shop-wise table top 3 brands ke
 saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
 
-Agar sawaal upar ke kisi specific intent (2-26) se match nahi karta, "generic" use karo.
+27. "zero_sale_with_top_segment_brands" -- ek brand ke zero-sale shops (jaha bilkul nahi bikta)
+    dhoondo, aur HAR ek zero-sale shop ke liye, us brand ke APNE bd_segment ke andar wahan ke
+    TOP N, BOTTOM N, ya MID N (middle/average performer) brands (columns ke roop mein: TOP 1,
+    TOP 2... ya BOTTOM 1... ya MID 1...) dikhao -- har cell format:
+    "Brand Name - Qty / Shop Segment %".
+    params: {{"brand_name": "Royal Ace", "top_n": 20, "rank_mode": "top"}}
+    "top_n" USER-CONFIGURABLE hai (default 20 agar na bataye) -- jitna user bole utne columns
+    banenge.
+    "rank_mode" teen values le sakta hai:
+    - "top" (default) -- sabse zyada bikne wale N brands us segment mein us shop pe.
+    - "bottom" -- jab user "BOTTOM N", "sabse kam bikne wale", "weakest N brands" poochein.
+    - "mid" -- jab user "MID performer", "average/middle N brands", "beech ke performers"
+      poochein -- na sabse top, na sabse bottom, ranking ke BEECH se N brands (median ke aas-paas).
+    Trigger: "Royal Ace ki sale 0 hai ya kaha nahi ho rahi, aur zero sale wali shops per same
+    segment mein kaun kaun se brand sale ho rahe hain, top 20 brands batao" (-> rank_mode:
+    "top"), "...bottom 20 brands batao" (-> rank_mode: "bottom"), "...mid performer 20 brands
+    batao" (-> rank_mode: "mid").
+    Agar user sirf "zero sale" poochein (bina "top/bottom/mid brands wahan" ke), use
+    "zero_presence_analysis" hi karo -- yeh naya intent SIRF tab jab dono cheezein saath poochi
+    jayein (zero-sale shops + wahan top/bottom N segment brands).
+
+Agar sawaal upar ke kisi specific intent (2-27) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -741,6 +804,15 @@ FIELD_DISPLAY_LABELS = {
     'absent_count': '❌ Absent Count (Zero Sale)',
     'absent_items': '❌ Zero-Sale Items',
     'shop_name': '🏪 Shop Name',
+    'sl_no': '🔢 Sl No',
+    'sale_qty_in_box': '📦 Sale Qty in Box',
+    'rows': '📊 Zero-Sale Shops with Top Segment Brands',
+    'rows_top': '📊 Zero-Sale Shops with Top Segment Brands',
+    'rows_bottom': '📊 Zero-Sale Shops with Bottom Segment Brands',
+    'rows_mid': '📊 Zero-Sale Shops with Mid Segment Brands',
+    'top_n': '🔢 Top N',
+    'n': '🔢 N',
+    'rank_direction': '📊 Rank Direction',
     'transaction_count': '🔢 Transaction Count',
     'months': '📅 Month(s)',
     'target_transaction_count': '🎯 Target Count',
@@ -1679,6 +1751,13 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             result = engine.zero_presence_analysis(
                 filter_col, resolved_value, universe_col,
                 show_hero_brand_in_segment=params.get("show_hero_brand_in_segment", False),
+            )
+
+        elif intent == "zero_sale_with_top_segment_brands":
+            resolved_brand = resolve_brand_name(params["brand_name"])
+            result = engine.zero_sale_with_top_segment_brands(
+                resolved_brand, top_n=params.get("top_n", 20),
+                rank_mode=params.get("rank_mode", "top"),
             )
 
         elif intent == "cross_tab_matrix":

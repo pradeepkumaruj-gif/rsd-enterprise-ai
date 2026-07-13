@@ -991,11 +991,34 @@ class SmartQueryEngine:
         present_universe_values = set(df.loc[mask, universe_col].dropna().unique())
         absent_values = sorted(all_universe_values - present_universe_values)
 
-        if universe_col == 'shop_code':
+        if universe_col == 'shop_code' and filter_col == 'brand_name_as_per_company_data':
+            # Rich report format: Sl No, Department, Shop Name, Shop Code,
+            # Brand Name, Sale Qty in Box (always 0, since these are the
+            # shops where this brand has ZERO sale). NOTE: bd_segment is
+            # NOT repeated in every row (it's the same value every time) --
+            # shown ONCE at the top level instead.
+            dept_map = df.drop_duplicates('shop_code').set_index('shop_code')['department'].to_dict()
+            name_map = (df.drop_duplicates('shop_code')
+                        .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
+            own_bd_segment_val = df.loc[mask, 'bd_segment'].iloc[0]
+            absent_items = [
+                {
+                    'sl_no': idx + 1,
+                    'department': dept_map.get(v, ''),
+                    'shop_name': name_map.get(v, ''),
+                    'shop_code': v,
+                    'brand': canonical_value,
+                    'sale_qty_in_box': 0,
+                }
+                for idx, v in enumerate(absent_values)
+            ]
+        elif universe_col == 'shop_code':
+            own_bd_segment_val = None
             name_map = (df.drop_duplicates('shop_code')
                         .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
             absent_items = [{'shop_code': v, 'shop_name': name_map.get(v, '')} for v in absent_values]
         else:
+            own_bd_segment_val = None
             absent_items = [{'item': v} for v in absent_values]
 
         # Optional enrichment: at EACH zero-presence shop, who is the "hero"
@@ -1017,7 +1040,7 @@ class SmartQueryEngine:
                     item['hero_brand_in_segment'] = None
                     item['hero_brand_qty'] = 0
 
-        return {
+        result = {
             'found': True,
             filter_col: canonical_value,
             'universe_dimension': universe_col,
@@ -1025,6 +1048,85 @@ class SmartQueryEngine:
             'present_count': len(present_universe_values),
             'absent_count': len(absent_values),
             'absent_items': absent_items[:50],  # cap for readable display
+        }
+        if own_bd_segment_val is not None:
+            result['bd_segment'] = own_bd_segment_val
+        return result
+
+    # ------------------------------------------------------------------
+    # z) Zero-sale shops + top N brands (SAME segment) at each shop, shown
+    #    as WIDE columns (TOP 1, TOP 2, ... TOP N) -- each cell is
+    #    "Brand Name - Qty / Shop Segment %".
+    # ------------------------------------------------------------------
+    def zero_sale_with_top_segment_brands(self, brand_name: str, top_n: int = 20, rank_mode: str = 'top'):
+        df = self.df
+        mask = df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()
+        if not mask.any():
+            return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+        canonical_brand = df.loc[mask, 'brand_name_as_per_company_data'].iloc[0]
+        own_bd_segment = df.loc[mask, 'bd_segment'].iloc[0]
+        segment_df = df[df['bd_segment'] == own_bd_segment]
+
+        all_shops = set(df['shop_code'].dropna().unique())
+        present_shops = set(df.loc[mask, 'shop_code'].dropna().unique())
+        absent_shops = sorted(all_shops - present_shops)
+
+        dept_map = df.drop_duplicates('shop_code').set_index('shop_code')['department'].to_dict()
+        name_map = (df.drop_duplicates('shop_code')
+                    .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
+
+        # Column key prefix changes based on direction -- "bottom_1",
+        # "mid_1"... vs "top_1"... -- so table headers automatically read
+        # "Bottom 1", "Mid 1" (via the default label formatter) matching
+        # which slice of the segment ranking is being shown.
+        col_prefix = rank_mode if rank_mode in ('top', 'bottom', 'mid') else 'top'
+
+        rows = []
+        for idx, shop_code in enumerate(absent_shops[:50], start=1):
+            shop_seg_df = segment_df[segment_df['shop_code'] == shop_code]
+            shop_seg_total = int(shop_seg_df['sale_qty_in_box'].sum())
+            full_ranked = (shop_seg_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+                           .sum().sort_values(ascending=False))
+
+            if col_prefix == 'bottom':
+                ranked_here = full_ranked.sort_values(ascending=True).head(top_n)
+            elif col_prefix == 'mid':
+                # Middle N brands from the FULL segment-at-this-shop ranking
+                # -- a slice centered around the median rank, neither the
+                # strongest nor the weakest performers.
+                total_here = len(full_ranked)
+                start = max(0, (total_here - top_n) // 2)
+                ranked_here = full_ranked.iloc[start:start + top_n]
+            else:
+                ranked_here = full_ranked.head(top_n)
+
+            row = {
+                'sl_no': idx,
+                'department': dept_map.get(shop_code, ''),
+                'shop_name': name_map.get(shop_code, ''),
+                'shop_code': shop_code,
+                'sale_qty_in_box': 0,
+            }
+            ranked_list = list(ranked_here.items())
+            for rank in range(1, top_n + 1):
+                col_key = f'{col_prefix}_{rank}'
+                if rank <= len(ranked_list):
+                    b_name, b_qty = ranked_list[rank - 1]
+                    b_qty = int(b_qty)
+                    b_pct = round(b_qty / shop_seg_total * 100, 2) if shop_seg_total else 0.0
+                    row[col_key] = f"{b_name} - {b_qty} / {b_pct}%"
+                else:
+                    row[col_key] = ""
+            rows.append(row)
+
+        return {
+            'found': True,
+            'brand': canonical_brand,
+            'bd_segment': own_bd_segment,
+            'absent_count': len(absent_shops),
+            'rank_direction': col_prefix,
+            'n': top_n,
+            f'rows_{col_prefix}': rows,
         }
 
     # ------------------------------------------------------------------
