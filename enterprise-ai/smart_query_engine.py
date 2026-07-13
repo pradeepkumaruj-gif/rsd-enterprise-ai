@@ -991,34 +991,59 @@ class SmartQueryEngine:
         present_universe_values = set(df.loc[mask, universe_col].dropna().unique())
         absent_values = sorted(all_universe_values - present_universe_values)
 
+        # Enrichment fields (only meaningful when checking a BRAND's zero-
+        # presence): the brand's own segment context (segment total sale,
+        # overall market %) + the brand's own overall qty/market-share/
+        # segment-share + its company -- shown ONCE above the table, same
+        # style as segment_top_brands_with_shop_and_compare.
+        enrichment = {}
+        if filter_col == 'brand_name_as_per_company_data':
+            own_bd_segment_val = df.loc[mask, 'bd_segment'].iloc[0]
+            segment_df = df[df['bd_segment'] == own_bd_segment_val]
+            segment_total_qty = int(segment_df['sale_qty_in_box'].sum())
+            overall_total_market = int(self.total_market)
+            brand_overall_qty = int(df.loc[mask, 'sale_qty_in_box'].sum())
+            enrichment = {
+                'bd_segment': own_bd_segment_val,
+                'segment_total_sale': segment_total_qty,
+                'overall_total_market': overall_total_market,
+                'segment_pct_of_overall_market': (
+                    float(round(segment_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+                ),
+                'brand_overall_qty': brand_overall_qty,
+                'brand_overall_pct_of_market': (
+                    float(round(brand_overall_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+                ),
+                'brand_overall_pct_of_segment': (
+                    float(round(brand_overall_qty / segment_total_qty * 100, 2)) if segment_total_qty else 0.0
+                ),
+                'company_name': df.loc[mask, 'company_name'].iloc[0],
+            }
+        else:
+            own_bd_segment_val = None
+
         if universe_col == 'shop_code' and filter_col == 'brand_name_as_per_company_data':
-            # Rich report format: Sl No, Department, Shop Name, Shop Code,
-            # Brand Name, Sale Qty in Box (always 0, since these are the
-            # shops where this brand has ZERO sale). NOTE: bd_segment is
-            # NOT repeated in every row (it's the same value every time) --
-            # shown ONCE at the top level instead.
+            # Sl No, Department, Shop Name, Shop Code, Sale Qty in Box
+            # (always 0). Brand/BD Segment are NOT repeated per row (same
+            # value every time) -- shown ONCE above the table instead.
             dept_map = df.drop_duplicates('shop_code').set_index('shop_code')['department'].to_dict()
             name_map = (df.drop_duplicates('shop_code')
                         .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
-            own_bd_segment_val = df.loc[mask, 'bd_segment'].iloc[0]
             absent_items = [
                 {
                     'sl_no': idx + 1,
                     'department': dept_map.get(v, ''),
                     'shop_name': name_map.get(v, ''),
                     'shop_code': v,
-                    'brand': canonical_value,
                     'sale_qty_in_box': 0,
                 }
                 for idx, v in enumerate(absent_values)
             ]
         elif universe_col == 'shop_code':
-            own_bd_segment_val = None
             name_map = (df.drop_duplicates('shop_code')
                         .set_index('shop_code')['shop_name_as_per_company_data'].to_dict())
             absent_items = [{'shop_code': v, 'shop_name': name_map.get(v, '')} for v in absent_values]
         else:
-            own_bd_segment_val = None
             absent_items = [{'item': v} for v in absent_values]
 
         # Optional enrichment: at EACH zero-presence shop, who is the "hero"
@@ -1043,14 +1068,13 @@ class SmartQueryEngine:
         result = {
             'found': True,
             filter_col: canonical_value,
+            **enrichment,
             'universe_dimension': universe_col,
             'total_universe_count': len(all_universe_values),
             'present_count': len(present_universe_values),
             'absent_count': len(absent_values),
             'absent_items': absent_items[:50],  # cap for readable display
         }
-        if own_bd_segment_val is not None:
-            result['bd_segment'] = own_bd_segment_val
         return result
 
     # ------------------------------------------------------------------
@@ -1066,6 +1090,23 @@ class SmartQueryEngine:
         canonical_brand = df.loc[mask, 'brand_name_as_per_company_data'].iloc[0]
         own_bd_segment = df.loc[mask, 'bd_segment'].iloc[0]
         segment_df = df[df['bd_segment'] == own_bd_segment]
+
+        # Same enrichment header as zero_presence_analysis: brand's own
+        # segment context, overall stats, and company -- shown ONCE above
+        # the wide TOP/BOTTOM/MID table.
+        segment_total_qty = int(segment_df['sale_qty_in_box'].sum())
+        overall_total_market = int(self.total_market)
+        brand_overall_qty = int(df.loc[mask, 'sale_qty_in_box'].sum())
+        segment_pct_of_overall_market = (
+            float(round(segment_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+        )
+        brand_overall_pct_of_market = (
+            float(round(brand_overall_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+        )
+        brand_overall_pct_of_segment = (
+            float(round(brand_overall_qty / segment_total_qty * 100, 2)) if segment_total_qty else 0.0
+        )
+        company_name = df.loc[mask, 'company_name'].iloc[0]
 
         all_shops = set(df['shop_code'].dropna().unique())
         present_shops = set(df.loc[mask, 'shop_code'].dropna().unique())
@@ -1123,6 +1164,13 @@ class SmartQueryEngine:
             'found': True,
             'brand': canonical_brand,
             'bd_segment': own_bd_segment,
+            'segment_total_sale': segment_total_qty,
+            'overall_total_market': overall_total_market,
+            'segment_pct_of_overall_market': segment_pct_of_overall_market,
+            'brand_overall_qty': brand_overall_qty,
+            'brand_overall_pct_of_market': brand_overall_pct_of_market,
+            'brand_overall_pct_of_segment': brand_overall_pct_of_segment,
+            'company_name': company_name,
             'absent_count': len(absent_shops),
             'rank_direction': col_prefix,
             'n': top_n,
