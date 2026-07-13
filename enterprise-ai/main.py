@@ -601,9 +601,16 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     TOP N, BOTTOM N, ya MID N (middle/average performer) brands (columns ke roop mein: TOP 1,
     TOP 2... ya BOTTOM 1... ya MID 1...) dikhao -- har cell format:
     "Brand Name - Qty / Shop Segment %".
-    params: {{"brand_name": "Royal Ace", "top_n": 20, "rank_mode": "top"}}
-    "top_n" USER-CONFIGURABLE hai (default 20 agar na bataye) -- jitna user bole utne columns
-    banenge.
+    params: {{"brand_name": "Royal Ace", "top_n": <USER KA EXACT NUMBER, NEECHE DEKHO>, "rank_mode": "top"}}
+    ⚠️ CRITICAL -- "top_n" HAMESHA user ke sawaal mein jo ACTUAL number bola gaya hai (jaise "top
+    3" mein "3", "bottom 7" mein "7", "mid 12" mein "12"), WAHI use karo -- EXACT wahi digit jo
+    query mein likha hai, NA KI koi "typical"/"example" number. 20 SIRF tab use karo jab user ne
+    SACH MEIN KOI number NAHI bola ho (jaise sirf "top brands batao" bola, "top 3"/"top 5" jaisa
+    kuch specify nahi kiya) -- agar bilkul koi number nahi hai sawaal mein, TABHI default 20 lo.
+    Agar sawaal mein "3" likha hai, top_n MUST be 3 -- 20 kabhi mat likho jab query mein clearly
+    koi aur number diya ho. Yeh mistake pehle ho chuki hai (user ne "top 3" poocha tha, system ne
+    galti se 20 de diya) -- is se bachna hai, hamesha query ko dobara padho aur EXACT number
+    nikaalo pehle "top_n" set karne se pehle.
     "rank_mode" teen values le sakta hai:
     - "top" (default) -- sabse zyada bikne wale N brands us segment mein us shop pe.
     - "bottom" -- jab user "BOTTOM N", "sabse kam bikne wale", "weakest N brands" poochein.
@@ -723,6 +730,14 @@ Rules:
 - filters mein JITNE BHI dimensions ka specific value user ne mention kiya ho, sab daalo (multiple filters ek saath chal sakte hain -- jaise "April mein DCCWS department ka Whisky" -> {{"month": "Apr", "department": "DCCWS", "liquor_type": "Whisky"}})
 - Agar do mahino ka comparison chahiye ("April vs May"), month ko group_by mein daalo, filter mein nahi
 - top_n default 10, agar "top 5" jaisa kuch bola hai to wahi number daalo
+- ⚠️ UNIVERSAL RULE (SAB intents ke liye, sirf generic ke liye nahi): jahan bhi "top_n",
+  "top_n_shops", "top_n_brands", "bottom_n_shops", ya koi bhi "N/count/number" wala parameter
+  ho, HAMESHA user ke sawaal mein jo ACTUAL number likha hai wahi use karo -- EXACT wahi digit.
+  In system instructions mein jahan bhi examples mein "10", "20", "5" jaisi values dikhayi gayi
+  hain (jaise "top_n": 20), yeh SIRF illustration hain, FIXED defaults NAHI -- inhe kabhi bhi
+  user ke actual number ke upar priority mat do. Sawaal ko dobara dhyan se padho, jo number
+  wahan likha hai (jaise "top 3" mein "3") wahi params mein daalo -- default value SIRF tab lo
+  jab sawaal mein SACH MEIN koi number na ho.
 - Agar sawaal total/overall pucha hai bina kisi grouping ke, group_by ko empty list [] rakho
 - "kitne total/alag/unique X hai" jaise sawaalon ke liye metric="count_distinct" use karo, group_by ko empty [] rakho
 - "value_range" -- jab user kisi NUMBER RANGE ke andar wale items poochta hai (jaise "500-1000
