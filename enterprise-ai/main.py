@@ -810,6 +810,7 @@ FIELD_DISPLAY_LABELS = {
     'shop_name': '🏪 Shop Name',
     'sl_no': '🔢 Sl No',
     'sale_qty_in_box': '📦 Sale Qty in Box',
+    'segment_sale_on_shop': '📦 Segment Sale on Shop',
     'rows': '📊 Zero-Sale Shops with Top Segment Brands',
     'rows_top': '📊 Zero-Sale Shops with Top Segment Brands',
     'rows_bottom': '📊 Zero-Sale Shops with Bottom Segment Brands',

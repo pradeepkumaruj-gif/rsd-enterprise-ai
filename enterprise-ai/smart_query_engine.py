@@ -1147,6 +1147,7 @@ class SmartQueryEngine:
                 'shop_name': name_map.get(shop_code, ''),
                 'shop_code': shop_code,
                 'sale_qty_in_box': 0,
+                'segment_sale_on_shop': shop_seg_total,
             }
             ranked_list = list(ranked_here.items())
             for rank in range(1, top_n + 1):
