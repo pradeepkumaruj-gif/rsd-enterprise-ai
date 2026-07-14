@@ -1179,12 +1179,98 @@ class SmartQueryEngine:
         }
 
     # ------------------------------------------------------------------
+    # ab) BD Segment x Month x Brand breakdown -- for each (segment, month,
+    #     brand) combination, shows sale qty and the brand's % share of
+    #     that segment IN that specific month. BD Segment reflects in
+    #     EVERY row (not summarized once) since this report can span
+    #     multiple segments and months at once, unlike our other reports
+    #     which are scoped to one segment/brand.
+    # ------------------------------------------------------------------
+    def segment_month_brand_breakdown(self, bd_segment: str = None, top_n_brands: int = None):
+        """PIVOT-style report: one row per (BD Segment, Brand), with EACH
+        month's sale as a SEPARATE column (e.g. 'Apr-26 Sale', 'May-26
+        Sale'), plus a 'Total' column (sum across the whole period) and
+        'Brand % of Total Segment' (that brand's share of the segment's
+        TOTAL sale across the whole period, not per-month)."""
+        df = self.df
+        canonical_segment = None
+        if bd_segment:
+            mask = df['bd_segment'].astype(str).str.upper() == str(bd_segment).upper()
+            if not mask.any():
+                return {'found': False, 'message': f'"{bd_segment}" not found in bd_segment.'}
+            canonical_segment = df.loc[mask, 'bd_segment'].iloc[0]
+            df = df[mask]
+
+        if df.empty:
+            return {'found': False, 'message': 'Is filter ke liye koi data nahi mila.'}
+
+        # Chronological month order (not alphabetical) -- so columns read
+        # left-to-right in real calendar sequence.
+        months = sorted(df['month'].astype(str).unique(),
+                         key=lambda m: pd.to_datetime(m, format='%b-%y', errors='coerce'))
+        month_cols = [f'{m} Sale' for m in months]
+
+        # Segment's TOTAL sale across the WHOLE period (all months combined)
+        # -- the denominator for "Brand % of Total Segment".
+        segment_totals = df.groupby('bd_segment')['sale_qty_in_box'].sum()
+
+        pivot = df.pivot_table(index=['bd_segment', 'brand_name_as_per_company_data'],
+                                columns='month', values='sale_qty_in_box',
+                                aggfunc='sum', fill_value=0)
+        pivot = pivot.reindex(columns=months, fill_value=0)
+
+        rows = []
+        for (seg, brand), row_data in pivot.iterrows():
+            total_qty = int(row_data.sum())
+            seg_total = int(segment_totals.get(seg, 0))
+            pct = float(round(total_qty / seg_total * 100, 2)) if seg_total else 0.0
+
+            row = {}
+            if canonical_segment is None:
+                row['bd_segment'] = seg
+            row['brand'] = brand
+            for m, col_label in zip(months, month_cols):
+                row[col_label] = int(row_data[m])
+            row['Total'] = total_qty
+            row['brand_pct_of_total_segment'] = pct
+            rows.append(row)
+
+        # Sort by Total descending within each segment, cap to top_n_brands
+        # PER segment (not overall) -- otherwise one huge segment would
+        # crowd out smaller ones entirely.
+        rows.sort(key=lambda r: (r.get('bd_segment', ''), -r['Total']))
+        if top_n_brands:
+            capped_rows = []
+            current_key = None
+            count_in_group = 0
+            for r in rows:
+                key = r.get('bd_segment', canonical_segment)
+                if key != current_key:
+                    current_key = key
+                    count_in_group = 0
+                count_in_group += 1
+                if count_in_group <= top_n_brands:
+                    capped_rows.append(r)
+            rows = capped_rows
+
+        result = {'found': True, '__show_full__': True}
+        if canonical_segment is not None:
+            result['bd_segment'] = canonical_segment
+        result['rows'] = rows
+        return result
+
+    # ------------------------------------------------------------------
     # w) GAP #9: Cross-tab / matrix report -- one dimension as rows,
     #    another as columns, sale qty as cell values (like an Excel
     #    pivot table).
     # ------------------------------------------------------------------
     def cross_tab_matrix(self, row_dim: str, col_dim: str, top_rows: int = 10, top_cols: int = 8):
         df = self.df
+        if row_dim == col_dim:
+            return {'found': False,
+                    'message': ('Row aur Column dimension SAME nahi ho sakte cross-tab ke liye -- '
+                                'yeh ek matrix hai, dono taraf same dimension dikhane ka koi matlab '
+                                'nahi banta. Alag-alag dimensions do (jaise department vs liquor_type).')}
         top_row_vals = (df.groupby(row_dim)['sale_qty_in_box'].sum()
                          .sort_values(ascending=False).head(top_rows).index.tolist())
         top_col_vals = (df.groupby(col_dim)['sale_qty_in_box'].sum()

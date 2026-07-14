@@ -630,7 +630,37 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     na ho), use "zero_presence_analysis" hi karo -- yeh naya intent SIRF tab jab dono cheezein
     saath poochi jayein (zero-sale shops + wahan kisi NUMBER ke saath top/bottom/mid brands).
 
-Agar sawaal upar ke kisi specific intent (2-27) se match nahi karta, "generic" use karo.
+28. "segment_month_brand_breakdown" -- BD Segment ke andar brands ka PIVOT-style report -- EK ROW
+    per (Segment, Brand), aur HAR MONTH ka sale ek ALAG COLUMN mein (jaise "Apr-26 Sale", "May-26
+    Sale"), PLUS "Total" column (poore period ka sum) aur "Brand % of Total Segment" (us brand ka
+    % poore period ke segment total mein se, per-month nahi). "BD Segment" har row mein dikhta
+    hai SIRF tab jab MULTIPLE segments cover ho rahe hon (agar ek hi segment scope hai, ek baar
+    upar summary mein dikhega, row mein repeat nahi hoga).
+    params: {{"bd_segment": "Semi Pre Whisky", "top_n_brands": null}}
+    "bd_segment" OPTIONAL hai -- agar diya, sirf usi segment tak scope hoga. Agar nahi diya
+    (null), SAARE segments cover honge.
+    "top_n_brands" -- OPTIONAL hai. Agar user koi specific number bole (jaise "top 10 brands",
+    "top 5"), wahi number daalo. Agar user KOI number NA bole (jaise sirf "brand-wise report do"
+    bola, "top N" jaisa kuch nahi bola), "top_n_brands": null rakho -- iska matlab SAARE brands
+    us segment ke aayenge (koi limit nahi), NA KI default 10. "10" sirf ek EXAMPLE tha, DEFAULT
+    NAHI hai -- default hamesha "saare brands" (null) hai jab tak user khud koi number na bole.
+    MONTH FLEXIBILITY -- kitne months COLUMNS mein aayenge, yeh "month_filter" (universal field)
+    control karta hai:
+    - Agar user "monthly" ya "har mahine ka" bole (bina specific bataye), "month_filter" null
+      rakho -- system automatically SAARE loaded months ko alag columns mein dikha dega
+      (jaise 2 months load hain to "Apr-26 Sale" aur "May-26 Sale" dono columns aayenge).
+    - Agar user ek SPECIFIC month bole (jaise "sirf April 26 ka"), "month_filter": {{"start":
+      "Apr-26", "end": "Apr-26"}} daalo -- tab sirf ek month column aayega.
+    - Agar user RANGE bole (jaise "April se May tak"), "month_filter": {{"start": "Apr-26",
+      "end": "May-26"}} daalo -- range ke saare months apne-apne column mein aayenge, aur
+      "Total" us poore range ka sum hoga.
+    Trigger: "BD Segment wise, brand wise, month wise (column mein) sale aur total segment % ka
+    report do" (-> bd_segment: null, month_filter: null), "Semi Pre Whisky ka brand-wise report,
+    har month alag column mein, total aur % ke saath" (-> bd_segment: "Semi Pre Whisky",
+    month_filter: null), "April se May tak Semi Pre Whisky ka pivot report" (-> month_filter:
+    {{"start":"Apr-26","end":"May-26"}})
+
+Agar sawaal upar ke kisi specific intent (2-28) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -720,6 +750,15 @@ yeh dimension use karo.
   - "avg_per_dimension" mein woh dimension daalo jiske "per" average nikalna hai (jaise "per shop" -> "party", "per TSE" -> "tse")
   - "filters" mein context filters daalo (jaise brand)
   - "group_by" -- agar ek hi overall average chahiye, empty [] rakho. Agar "brand wise average" jaisa breakdown chahiye, group_by mein woh dimension daalo (jaise ["brand"])
+  ⚠️ IMPORTANT EDGE CASE -- agar user "[X dimension]-wise average sale" bole JAHAN X dimension
+  WAHI hai jo already avg_per_dimension mein hai (jaise "Royal Ace ki shop-wise average sale
+  batao" -- yahan "average sale PER SHOP" already bola gaya pehle, ab "shop-wise breakdown"
+  poocha ja raha hai) -- iska koi mathematical sense nahi banta agar group_by aur
+  avg_per_dimension dono SHOP hi ho jayein (har group mein 1 hi shop hoga, average uska apna
+  total hi ban jayega, useless calculation). Is case mein "avg_per_dimension" ko "month" set
+  karo (chahe user ne explicitly na bola ho) -- yeh sabse sensible business metric hai: "har
+  shop ka AVERAGE MONTHLY sale" (jitne mahino ka data hai unme se average). group_by mein
+  wahi dimension rakho jo user ne bola (jaise ["party"] shop-wise ke liye).
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
@@ -760,6 +799,10 @@ FIELD_DISPLAY_LABELS = {
     'company': '🏢 Company',
     'bd_segment': '🏷️ BD Segment',
     'sale_qty': '📦 Sale Qty (Boxes)',
+    'month': '📅 Month',
+    'brand_pct_of_segment': '📊 Brand % of Segment',
+    'Total': '📦 Total',
+    'brand_pct_of_total_segment': '📊 Brand % of Total Segment',
     'pct_within_bd_segment': '📊 % Within Segment',
     'pct_of_market': '🌍 % of Market',
     'shops_selling': '🏪 Shops Selling',
@@ -1086,13 +1129,20 @@ def render_data_deterministically(data) -> str:
                     lines.append("💡 Kya aapka matlab in mein se tha: " + ", ".join(data[key]))
             return "\n".join(lines)
 
+        # Per-response override: some reports (e.g. segment_month_brand_
+        # breakdown -- a management report meant to be reviewed in full,
+        # not skimmed) explicitly ask to show ALL rows on screen instead
+        # of the default truncated limit.
+        row_limit = None if data.get("__show_full__") else DOWNLOAD_DISPLAY_LIMIT
+
         sections = []
         for key, value in data.items():
-            if key == "found":
+            if key in ("found", "__show_full__"):
                 continue
             label = _pretty_label(key)
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(value[:DOWNLOAD_DISPLAY_LIMIT])}")
+                display_rows = value if row_limit is None else value[:row_limit]
+                sections.append(f"**{label}**\n\n{dicts_to_markdown_table(display_rows)}")
             elif isinstance(value, dict) and value:
                 # A plain {name: number} dict (e.g. market_share's 'ranking'
                 # field) -- convert to proper table rows instead of dumping
@@ -1275,6 +1325,19 @@ def run_query(spec: dict, working_df=None):
             return "Average nikalne ke liye valid 'per' dimension chahiye (jaise shop, tse, department)."
 
         group_by = [DIMENSIONS[d] for d in (spec.get("group_by") or []) if d in DIMENSIONS]
+
+        # Defensive fix: averaging "per X" while ALSO grouping BY X is both
+        # mathematically meaningless (each group would trivially have
+        # exactly 1 unique X, making "average" just equal the group's own
+        # total) AND used to CRASH with a pandas KeyError (a groupby
+        # column gets excluded from the per-group dataframe inside
+        # .apply()). Auto-correct to a sensible default instead: average
+        # per MONTH -- almost certainly what "[X]-wise average sale" means
+        # when X is the same dimension already being averaged "per".
+        if avg_col in group_by:
+            avg_dim = "month"
+            avg_col = DIMENSIONS.get("month")
+
         top_n = spec.get("top_n") or 10
         sort_desc = spec.get("sort_desc", True)
 
@@ -1823,6 +1886,14 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             result = engine.zero_sale_with_top_segment_brands(
                 resolved_brand, top_n=params.get("top_n", 20),
                 rank_mode=params.get("rank_mode", "top"),
+            )
+
+        elif intent == "segment_month_brand_breakdown":
+            bd_segment = params.get("bd_segment")
+            if bd_segment:
+                bd_segment = resolve_bd_segment_name(bd_segment)
+            result = engine.segment_month_brand_breakdown(
+                bd_segment=bd_segment, top_n_brands=params.get("top_n_brands")
             )
 
         elif intent == "cross_tab_matrix":
