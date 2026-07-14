@@ -1256,7 +1256,7 @@ class SmartQueryEngine:
         result = {'found': True, '__show_full__': True}
         if canonical_segment is not None:
             result['bd_segment'] = canonical_segment
-        result['rows'] = rows
+        result['brand_month_breakdown'] = rows
         return result
 
     # ------------------------------------------------------------------

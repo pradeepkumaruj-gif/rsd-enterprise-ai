@@ -803,6 +803,7 @@ FIELD_DISPLAY_LABELS = {
     'brand_pct_of_segment': '📊 Brand % of Segment',
     'Total': '📦 Total',
     'brand_pct_of_total_segment': '📊 Brand % of Total Segment',
+    'brand_month_breakdown': '📊 Brand-wise Month Breakdown',
     'pct_within_bd_segment': '📊 % Within Segment',
     'pct_of_market': '🌍 % of Market',
     'shops_selling': '🏪 Shops Selling',
