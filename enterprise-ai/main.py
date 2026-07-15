@@ -1167,6 +1167,12 @@ def parse_query_with_claude(question: str) -> dict:
         max_tokens=700,  # schema has grown a lot (18 intents, many fields) -- 300 was
                          # too small and caused JSON to get cut off mid-structure for
                          # complex/combined queries, crashing the parser entirely.
+        temperature=0,   # CRITICAL for consistency -- this is a structured-parsing task
+                         # (turn a question into JSON), not a creative one. Without this,
+                         # the API defaults to temperature=1.0, which means the SAME
+                         # exact query can produce DIFFERENT JSON on different calls --
+                         # this was the root cause of "works sometimes, not others".
+                         # temperature=0 makes output maximally deterministic/repeatable.
         system=QUERY_PARSER_SYSTEM,
         messages=[{"role": "user", "content": question}],
     )
@@ -2138,37 +2144,43 @@ def chat(request: ChatRequest):
     if data_loading_status == "failed" or df.empty:
         return {"reply": "⚠️ Data load nahi ho paya. Backend logs check karo."}
 
-    try:
-        spec = parse_query_with_claude(request.message)
-    except Exception as e:
-        print(f"Query parse failed: {e}")
+    # Retry once on failure -- LLM parsing isn't 100% deterministic, so the
+    # SAME query can occasionally produce malformed JSON or params that
+    # crash execution, purely as a transient hiccup. Re-parsing from
+    # scratch (not just re-running the same bad params) usually recovers,
+    # since a fresh parse attempt often succeeds where the first didn't.
+    spec = None
+    data = None
+    last_error = None
+    for attempt in range(2):
+        try:
+            spec = parse_query_with_claude(request.message)
+        except Exception as e:
+            last_error = e
+            print(f"Query parse failed (attempt {attempt + 1}): {e}")
+            continue
+
+        if not spec.get("query_understood", True):
+            clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
+            return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
+
+        working_df = get_month_scoped_df(spec.get("month_filter"))
+        try:
+            intent = spec.get("intent", "generic")
+            if intent == "generic":
+                data = run_query(spec, working_df=working_df)
+            else:
+                data = run_special_intent(intent, spec.get("params") or {}, working_df=working_df)
+            last_error = None
+            break  # success -- stop retrying
+        except Exception as e:
+            last_error = e
+            print(f"Query run failed (attempt {attempt + 1}): {e}")
+            continue
+
+    if last_error is not None:
         return {"reply": ("🤔 Sawaal samajh nahi paya. Try karo: 'Top TSE April mein', "
                            "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")}
-
-    # Self-reported confidence check -- if Claude itself isn't sure what was
-    # asked, we stop right here instead of guessing an intent/filter and
-    # confidently returning a "correct-looking" answer to the WRONG question.
-    if not spec.get("query_understood", True):
-        clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
-        return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
-
-    # Optional custom period scoping (single month or a month RANGE) --
-    # applies to specialized functions (brand_report, comparisons, segment
-    # breakdowns, etc.) that otherwise always compute across ALL loaded
-    # months combined. MoM-type intents ignore this (they need exactly
-    # 2 specific months by design, handled separately).
-    working_df = get_month_scoped_df(spec.get("month_filter"))
-
-    try:
-        intent = spec.get("intent", "generic")
-        if intent == "generic":
-            data = run_query(spec, working_df=working_df)
-        else:
-            data = run_special_intent(intent, spec.get("params") or {}, working_df=working_df)
-    except Exception as e:
-        print(f"Query run failed: {e}")
-        data = ("Sawaal samajh nahi aaya. Try karo: 'Top TSE April mein', "
-                "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")
 
     # Some intents need a SMALLER table on-screen (readability) but the
     # FULL matching dataset available for download -- they signal this by
