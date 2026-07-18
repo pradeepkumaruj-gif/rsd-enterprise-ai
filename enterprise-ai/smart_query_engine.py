@@ -617,15 +617,30 @@ class SmartQueryEngine:
     # r) GENERIC profile for any dimension value (department, shop, TSE) --
     #    same idea as company_full_profile but works for any column.
     # ------------------------------------------------------------------
-    def dimension_full_profile(self, column: str, value: str):
+    def dimension_full_profile(self, column: str, value: str, scope_filters: dict = None):
         df = self.df
+        # Optional scope filters (e.g. {'company_name': 'Rock and Storm'}) --
+        # applied BEFORE computing rank/share, so a TSE/shop/department
+        # comparison can be scoped to "only this company's brands", not the
+        # TSE's ENTIRE territory across all companies combined.
+        if scope_filters:
+            for scope_col, scope_val in scope_filters.items():
+                df = df[df[scope_col].astype(str).str.upper() == str(scope_val).upper()]
+            if df.empty:
+                return {'found': False, 'message': 'Is scope filter ke liye koi data nahi mila.'}
+
         sub = df[df[column].astype(str).str.upper() == str(value).upper()]
         if sub.empty:
-            return {'found': False, 'message': f'"{value}" not found.'}
+            return {'found': False, 'message': f'"{value}" not found (is scope ke andar, agar scoped hai).'}
 
         canonical_value = sub[column].iloc[0]
         total_qty = int(sub['sale_qty_in_box'].sum())
-        market_share_pct = float(round(total_qty / self.total_market * 100, 2))
+        # Denominator for market_share_pct: the SCOPE's total if scoped,
+        # else the whole dataset's total (self.total_market) -- so % means
+        # "share of what we're actually comparing within", not always the
+        # full unfiltered market.
+        scope_total = int(df['sale_qty_in_box'].sum()) if scope_filters else self.total_market
+        market_share_pct = float(round(total_qty / scope_total * 100, 2)) if scope_total else 0.0
 
         overall_rank_series = df.groupby(column)['sale_qty_in_box'].sum().sort_values(ascending=False)
         overall_rank = int(overall_rank_series.index.get_loc(canonical_value) + 1)
@@ -654,17 +669,21 @@ class SmartQueryEngine:
     # ------------------------------------------------------------------
     # s) Compare 2-10 values of the SAME dimension (department vs
     #    department, shop vs shop, TSE vs TSE) -- reuses
-    #    dimension_full_profile for each value.
+    #    dimension_full_profile for each value. Optional scope_filters
+    #    (e.g. company) scopes the WHOLE comparison to just that context.
     # ------------------------------------------------------------------
-    def compare_dimension_values(self, column: str, values: list, max_values: int = 10):
+    def compare_dimension_values(self, column: str, values: list, max_values: int = 10, scope_filters: dict = None):
         if len(values) < 2:
             return {'found': False, 'message': 'Please provide at least 2 values to compare.'}
         if len(values) > max_values:
             return {'found': False,
                     'message': f'Maximum {max_values} values allowed. You gave {len(values)}.'}
 
-        details = {v: self.dimension_full_profile(column, v) for v in values}
-        return {'found': True, 'values_compared': len(values), 'details': details}
+        details = {v: self.dimension_full_profile(column, v, scope_filters=scope_filters) for v in values}
+        result = {'found': True, 'values_compared': len(values), 'details': details}
+        if scope_filters:
+            result['scope_filters'] = scope_filters
+        return result
 
     # ------------------------------------------------------------------
     # o) Compare 2-10 companies side by side (reuses company_full_profile's

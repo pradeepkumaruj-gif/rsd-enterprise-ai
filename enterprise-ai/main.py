@@ -368,17 +368,27 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
 17. "compare_dimension_values" -- 2 se 10 DEPARTMENTS, SHOPS, TSEs, BD SEGMENTS, LIQUOR TYPES,
     ya PACK SIZES (SAME dimension) ko side-by-side compare karo (bilkul compare_brands jaisa
     pattern) -- total sale, rank, brands count, top brand, market share.
-    params: {{"dimension": "department", "values": ["DCCWS", "DSIIDC", ...]}}
+    params: {{"dimension": "department", "values": ["DCCWS", "DSIIDC", ...], "scope_filters": {{}}}}
     "dimension" ho sakta hai: "department", "shop_code", "party" (shop name), "tse", "bd_segment",
     "liquor_type", ya "pack_size" -- (brand aur company ke liye "compare_brands"/"compare_companies"
     use karo, yeh unke liye zyada detailed hai).
+    "scope_filters" OPTIONAL hai -- ⚠️ BAHUT ZAROORI: agar user comparison ko KISI SPECIFIC
+    company/brand/segment ke context tak SEEMIT karna chahta hai (jaise "Rock and Storm ke
+    brands ke hisaab se Sunil Sharma vs Ram Gopal"), yahan wahi filter daalo (jaise {{"company":
+    "Rock and Storm"}}) -- warna comparison poori territory/market ka hoga (SAB companies ke
+    brands milaake), na ki sirf mentioned company ke brands ka. Yeh EXTREMELY common mistake
+    hai -- agar sawaal mein KOI BHI company/brand/segment ka naam TSE/shop/department ke saath
+    mention ho, USE HAMESHA "scope_filters" mein daalo, ignore MAT karo.
     IMPORTANT: "values" list ka ORDER wahi rakho jis order mein user ne bola -- PEHLA value jo
     user bole use ANCHOR maana jayega (agar 3+ values hain, anchor har table mein fixed rehta
     hai, baaki 2-2 karke chunk hote hain) -- bilkul compare_brands jaisa.
     Trigger: "DCCWS vs DSIIDC compare karo", "in departments ka comparison karo: DCCWS, DSIIDC,
     DTTDC", "TSE Raj vs TSE Amit compare karo", "Semi Pre Whisky vs Regular Whisky compare karo"
     (-> dimension: "bd_segment"), "Whisky vs Vodka compare karo" (-> dimension: "liquor_type"),
-    "Bottle vs Quarter compare karo" (-> dimension: "pack_size")
+    "Bottle vs Quarter compare karo" (-> dimension: "pack_size"), "Rock and Storm Distilleries,
+    Sunil Sharma vs Ram Gopal" (-> dimension: "tse", values: ["Sunil Sharma", "Ram Gopal Sharma"],
+    scope_filters: {{"company": "Rock and Storm Distilleries"}} -- company naam ko IGNORE mat
+    karo, isko scope_filters mein zaroor daalo)
 
 18. "brand_weak_shops_analysis" -- ek brand ke BOTTOM/WEAKEST shops YA TOP/STRONGEST shops
     dhoondo (jaha sabse kam YA sabse zyada bikta hai), phir unhi shops mein dekho konse brands
@@ -926,6 +936,7 @@ FIELD_DISPLAY_LABELS = {
     'scope_type': '🔍 Scope Type',
     'scope_value': '📌 Scope Value',
     'total_brands_in_scope': '🥃 Total Brands',
+    'scope_filters': '🔍 Scope Filters',
     'scope_pct_of_overall_market': '🌍 % of Overall Market',
     'compare_brand_overall_pct_of_scope': '📊 Compare Brand Share',
     'brand_pct_of_total': '📊 Brand % of Total',
@@ -1715,7 +1726,14 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             if not dim_col:
                 return "Valid dimension chahiye (department, shop_code, party, tse, bd_segment, liquor_type, ya pack_size)."
             resolved_values = [fuzzy_resolve_value(str(v), dim_col) for v in params["values"]]
-            engine_result = engine.compare_dimension_values(dim_col, resolved_values)
+            resolved_scope_filters = {}
+            for dim, val in (params.get("scope_filters") or {}).items():
+                scope_col = DIMENSIONS.get(dim)
+                if scope_col:
+                    resolved_scope_filters[scope_col] = fuzzy_resolve_value(str(val), scope_col)
+            engine_result = engine.compare_dimension_values(
+                dim_col, resolved_values, scope_filters=resolved_scope_filters or None
+            )
             if not engine_result.get("found") and "details" not in engine_result:
                 result = engine_result
             else:
