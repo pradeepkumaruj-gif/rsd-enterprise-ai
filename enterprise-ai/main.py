@@ -699,6 +699,15 @@ pehchano aur sahi dimension pe map karo:
 - "tse" ke liye: "salesman", "sales rep", "field rep", "agent", "salesperson", "beat officer",
   "beat person" (FMCG mein route/territory ke liye "beat" bolte hain), "dsr" (distributor sales
   rep), "order booker", "field officer", "sales executive", "sales officer"
+  ⚠️ IMPORTANT -- INSAAN KE NAAM (jaise "Sunil Sharma", "Ram Gopal", "Raj Kumar") is dataset mein
+  SIRF "tse" dimension mein hote hain -- brand/company/shop names insaan ke naam jaise nahi
+  lagte (woh product/company/location names hote hain). Actual TSE names is dataset mein:
+  Sumit, Ravinder Kumar, Malkit Singh, Ankush, Raj kumar, Sher Singh, Shammi Kapoor, Sunil
+  Sharma, Ram Gopal Sharma, Lalit Kumar, Thapa. Agar user "Naam1 vs Naam2" jaisa bole (jaise
+  "Sunil Sharma vs Ram Gopal"), aur woh naam PERSON-NAME jaise lagte hain (first name + surname
+  pattern), TURANT "compare_dimension_values" (dimension: "tse") use karo -- CLARIFICATION MAT
+  MAANGO, guess mat maano "yeh TSE hai ya kuch aur" -- is dataset mein person-names ka MATLAB
+  hi TSE hai, koi ambiguity nahi hai yahan.
 - "department" ke liye: "vibhaag", "nigam" (yeh values khud corporations hain: DSIIDC, DTTDC,
   DCCWS, DSCSC, HCR), "corporation", "agency", "board", "govt corporation", "psu"
 - "shop_code" ke liye: "shop id", "shop number", "outlet code", "outlet id", "retailer code",
