@@ -784,6 +784,16 @@ yeh dimension use karo.
 
 Rules:
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
+- ⚠️ CRITICAL -- BARE DIMENSION NAMES (jaise "brand", "tse", "month", "company") KABHI FILTER
+  VALUE NAHI HOTE, hamesha GROUP_BY dimension hote hain. Jab user comma-separated keyword-list
+  style query de (jaise "Rock and Storm, brand, sale, tse, month" -- proper sentence nahi,
+  sirf words ki list), samjho ki "brand", "tse", "month" yahan DIMENSION NAMES hain jinke
+  hisaab se BREAKDOWN chahiye (group_by mein daalo), "Rock and Storm" ek FILTER VALUE hai
+  (specific company). "Sale" sirf metric confirm karta hai (sum). AISA MAT KARO: filters mein
+  {{"brand": "brand", "tse": "tse", "month": "month"}} jaisa literal word ko filter value maan
+  lena -- yeh HAMESHA galat hoga (data mein "brand" naam ka koi brand nahi hota), aur "koi data
+  nahi mila" jaisa empty result dega. Sahi mapping: filters: {{"company": "Rock and Storm"}},
+  group_by: ["brand", "tse", "month"], metric: "sum".
 - ⚠️ EXCEPTION to above: agar "department/shop/tse wise" ke SAATH "market share" ya "segment
   share" (specific ek brand ke liye) bhi poocha ho, yeh generic group_by MAT use karo -- iske
   liye "brand_report" intent use karo (woh market share % + department breakdown dono deta hai
