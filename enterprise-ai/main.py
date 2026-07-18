@@ -249,9 +249,14 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
    params: {{"brand_name": "...", "top_n": 10}}
    Trigger: "Dennis vs uske competitors shop wise"
 
-6. "brand_share_filter" -- BD Segment ke andar leading (>=threshold%) ya long-tail (<threshold%) brands.
-   params: {{"bd_segment": "...", "threshold": 5.0, "mode": "above" or "below"}}
-   Trigger: "Semi Pre Whisky mein 5% se zyada share wale brands", "kaunse brands 5% se kam hain"
+6. "brand_share_filter" -- KISI BHI dimension (BD Segment, Company, Department, TSE) ke andar
+   leading (>=threshold%) ya long-tail (<threshold%) brands.
+   params: {{"category_value": "...", "threshold": 5.0, "mode": "above" or "below",
+   "category_type": "bd_segment"}}
+   "category_type" ho sakta hai: "bd_segment" (default), "company", "department", ya "tse".
+   Trigger: "Semi Pre Whisky mein 5% se zyada share wale brands" (-> category_type: "bd_segment"),
+   "kaunse brands 5% se kam hain", "OMSONS company mein 5% se zyada share wale brands" (->
+   category_type: "company"), "DCCWS department mein leading brands" (-> category_type: "department")
 
 7. "compare_brands" -- 2 se 10 brands side-by-side compare.
    params: {{"brands": ["brand1", "brand2", ...]}}
@@ -301,11 +306,18 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     params: {{"brand_name": "..."}}
     Trigger: "Dennis pichle mahine se kaisa perform kiya", "Dennis ka growth"
 
-12. "brands_in_bd_segment" -- ek brand ke bd_segment (category) ke andar BAAKI SAB brands ki
-    ranked list (kaun kaun se aur brands isi category mein bikte hain, kitna sale hai).
-    params: {{"brand_name": "...", "top_n": 15}}
-    Trigger: "Royal Ace ke segment mein aur kaunse brands hain", "Dennis ki category mein
-    competitors kaun hain", "iske segment mein baaki brands"
+12. "brands_in_bd_segment" -- ek brand ke bd_segment (category) YA COMPANY ke andar BAAKI SAB
+    brands ki ranked list (kaun kaun se aur brands isi category/company mein bikte hain, kitna
+    sale hai). NOTE: yeh SIRF "bd_segment" aur "company" ke liye kaam karta hai -- department/
+    tse/shop ke liye NAHI (kyunki ek brand ek department/TSE tak "belong" nahi karta, woh kai
+    departments/TSEs mein bik sakta hai ek saath -- yeh concept sirf segment/company (jo brand
+    ki fixed "ownership" attribute hai) ke liye sense banata hai).
+    params: {{"brand_name": "...", "top_n": 15, "scope_type": "bd_segment"}}
+    "scope_type" ho sakta hai "bd_segment" (default) ya "company".
+    Trigger: "Royal Ace ke segment mein aur kaunse brands hain" (-> scope_type: "bd_segment"),
+    "Dennis ki category mein competitors kaun hain", "iske segment mein baaki brands", "Dennis
+    ki company ke aur kaunse brands hain" (-> scope_type: "company"), "Royal Ace ki company ka
+    poora brand portfolio dikhao" (-> scope_type: "company")
 
 13. "company_report" -- ek COMPANY (manufacturer) ki poori sale -- uske SAARE brands milaake,
     na ki sirf ek brand ka number. Agar user brand ka naam de ("Dennis brand ki company ka
@@ -501,16 +513,20 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     Trigger: "Top 10 by volume AND growth dono", "kaunse brands overall best hain volume aur
     growth dono ke hisaab se", "balanced performers dikhao"
 
-23. "segment_top_brands_with_shop_and_compare" -- ek BD Segment ke top N brands, HAR brand ki
-    apni #1 (best-selling) shop, us shop pe us brand ka % share (SEGMENT ke andar, usi shop
-    mein), PLUS ek SPECIFIC doosra brand ka status usi shop pe (uski qty + % share bhi segment
-    ke andar).
-    params: {{"bd_segment": "Semi Pre Whisky", "top_n": 20, "compare_brand": "8 PM PREMIUM BLACK BLENDED WHISKY"}}
+23. "segment_top_brands_with_shop_and_compare" -- KISI BHI dimension (BD Segment, Company,
+    Department, TSE) ke top N brands, HAR brand ki apni #1 (best-selling) shop, us shop pe us
+    brand ka % share (usi scope ke andar, usi shop mein), PLUS ek SPECIFIC doosra brand ka
+    status usi shop pe (uski qty + % share bhi usi scope ke andar).
+    params: {{"primary_dimension": "bd_segment", "primary_value": "Semi Pre Whisky", "top_n": 20,
+    "compare_brand": "8 PM PREMIUM BLACK BLENDED WHISKY"}}
+    "primary_dimension" ho sakta hai: "bd_segment" (default), "company", "department", ya "tse".
     "compare_brand" OPTIONAL hai -- agar diya, har row mein us brand ka bhi data aayega usi shop
     ke liye. Agar nahi diya, sirf top brands + unki shops + % share aayega.
     Trigger: "Semi Pre Whisky segment mein top 20 brands, kaunsi shop pe, shop ka market share %,
-    aur usi shop pe 8PM ki sale/status kya hai market share % ke saath" -- yeh EXACTLY is intent
-    ka case hai.
+    aur usi shop pe 8PM ki sale/status kya hai market share % ke saath" (-> primary_dimension:
+    "bd_segment"), "OMSONS company mein top brands, unki top shop, aur Dennis ka wahan status"
+    (-> primary_dimension: "company"), "DCCWS department mein top brands aur shop-wise detail"
+    (-> primary_dimension: "department")
 
 24. "brand_transaction_count_analysis" -- kisi brand ki EXACTLY N transactions (orders/rows) wali
     shops dhoondo -- QUANTITY (boxes) NAHI, ORDERS ki GINTI. Jaise "Royal Ace sirf EK baar gaya
@@ -630,19 +646,22 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     na ho), use "zero_presence_analysis" hi karo -- yeh naya intent SIRF tab jab dono cheezein
     saath poochi jayein (zero-sale shops + wahan kisi NUMBER ke saath top/bottom/mid brands).
 
-28. "segment_month_brand_breakdown" -- BD Segment ke andar brands ka PIVOT-style report -- EK ROW
-    per (Segment, Brand), aur HAR MONTH ka sale ek ALAG COLUMN mein (jaise "Apr-26 Sale", "May-26
-    Sale"), PLUS "Total" column (poore period ka sum) aur "Brand % of Total Segment" (us brand ka
-    % poore period ke segment total mein se, per-month nahi). "BD Segment" har row mein dikhta
-    hai SIRF tab jab MULTIPLE segments cover ho rahe hon (agar ek hi segment scope hai, ek baar
-    upar summary mein dikhega, row mein repeat nahi hoga).
-    params: {{"bd_segment": "Semi Pre Whisky", "top_n_brands": null}}
-    "bd_segment" OPTIONAL hai -- agar diya, sirf usi segment tak scope hoga. Agar nahi diya
-    (null), SAARE segments cover honge.
+28. "segment_month_brand_breakdown" -- KISI BHI dimension (BD Segment, Company, Department, TSE)
+    ke andar brands ka PIVOT-style report -- EK ROW per (primary dimension value, Brand), aur
+    HAR MONTH ka sale ek ALAG COLUMN mein (jaise "Apr-26 Sale", "May-26 Sale"), PLUS "Total"
+    column (poore period ka sum) aur "Brand % of Total" (us brand ka % poore period ke total
+    mein se, per-month nahi). Primary dimension har row mein dikhta hai SIRF tab jab MULTIPLE
+    values cover ho rahe hon (agar ek hi value scope hai, ek baar upar summary mein dikhega, row
+    mein repeat nahi hoga).
+    params: {{"primary_dimension": "bd_segment", "primary_value": "Semi Pre Whisky",
+    "top_n_brands": null}}
+    "primary_dimension" ho sakta hai: "bd_segment" (default), "company", "department", ya "tse".
+    "primary_value" OPTIONAL hai -- agar diya, sirf usi value tak scope hoga. Agar nahi diya
+    (null), us dimension ke SAARE values cover honge.
     "top_n_brands" -- OPTIONAL hai. Agar user koi specific number bole (jaise "top 10 brands",
     "top 5"), wahi number daalo. Agar user KOI number NA bole (jaise sirf "brand-wise report do"
     bola, "top N" jaisa kuch nahi bola), "top_n_brands": null rakho -- iska matlab SAARE brands
-    us segment ke aayenge (koi limit nahi), NA KI default 10. "10" sirf ek EXAMPLE tha, DEFAULT
+    us scope ke aayenge (koi limit nahi), NA KI default 10. "10" sirf ek EXAMPLE tha, DEFAULT
     NAHI hai -- default hamesha "saare brands" (null) hai jab tak user khud koi number na bole.
     MONTH FLEXIBILITY -- kitne months COLUMNS mein aayenge, yeh "month_filter" (universal field)
     control karta hai:
@@ -655,10 +674,13 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
       "end": "May-26"}} daalo -- range ke saare months apne-apne column mein aayenge, aur
       "Total" us poore range ka sum hoga.
     Trigger: "BD Segment wise, brand wise, month wise (column mein) sale aur total segment % ka
-    report do" (-> bd_segment: null, month_filter: null), "Semi Pre Whisky ka brand-wise report,
-    har month alag column mein, total aur % ke saath" (-> bd_segment: "Semi Pre Whisky",
-    month_filter: null), "April se May tak Semi Pre Whisky ka pivot report" (-> month_filter:
-    {{"start":"Apr-26","end":"May-26"}})
+    report do" (-> primary_dimension: "bd_segment", primary_value: null, month_filter: null),
+    "Semi Pre Whisky ka brand-wise report, har month alag column mein, total aur % ke saath"
+    (-> primary_dimension: "bd_segment", primary_value: "Semi Pre Whisky"), "OMSONS company ke
+    brand list, April aur May month-wise, market share ke saath" (-> primary_dimension:
+    "company", primary_value: "OMSONS"), "DCCWS department ke brands, month-wise" (->
+    primary_dimension: "department", primary_value: "DCCWS"), "April se May tak Semi Pre
+    Whisky ka pivot report" (-> month_filter: {{"start":"Apr-26","end":"May-26"}})
 
 Agar sawaal upar ke kisi specific intent (2-28) se match nahi karta, "generic" use karo.
 
@@ -878,6 +900,21 @@ FIELD_DISPLAY_LABELS = {
     'segment_pct_at_shop': '🌍 Segment % at Shop',
     'total_market_share': '🌍 Total Market Share',
     'top_brands': '📊 Top Brands',
+    'brand_total_qty_in_scope': '📦 Brand Total Qty',
+    'brand_scope_pct_at_shop': '🌍 Brand % at Shop',
+    'scope_total_sale': '📦 Total Sale',
+    'pct_within_scope': '📊 % Within Scope',
+    'scope_type': '🔍 Scope Type',
+    'scope_value': '📌 Scope Value',
+    'total_brands_in_scope': '🥃 Total Brands',
+    'scope_pct_of_overall_market': '🌍 % of Overall Market',
+    'compare_brand_overall_pct_of_scope': '📊 Compare Brand Share',
+    'brand_pct_of_total': '📊 Brand % of Total',
+    'category_type': '🔍 Category Type',
+    'category_value': '📌 Category Value',
+    'category_total_sale': '📦 Category Total Sale',
+    'total_brands_in_category': '🥃 Total Brands in Category',
+    'combined_share': '📊 Combined Share %',
     'universe_dimension': '🌍 Universe Dimension',
     'total_universe_count': '🔢 Total Universe Count',
     'present_count': '✅ Present Count',
@@ -1039,9 +1076,11 @@ PCT_SUFFIX_KEYS = {
     'segment_pct_of_overall_market',
     'compare_brand_overall_pct_of_market',
     'compare_brand_overall_pct_of_segment',
+    'compare_brand_overall_pct_of_scope',
     'brand_overall_pct_of_market',
     'brand_overall_pct_of_segment',
     'primary_pct_of_overall_market',
+    'scope_pct_of_overall_market',
     'market_share_pct',
     'pct_of_market',
 }
@@ -1572,10 +1611,13 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             result = engine.shop_comparison(params["brand_name"], top_n=params.get("top_n", 10))
 
         elif intent == "brand_share_filter":
+            category_type = DIMENSIONS.get(params.get("category_type", "bd_segment"), COL_BD_SEGMENT)
+            resolved_value = fuzzy_resolve_value(str(params["category_value"]), category_type)
             result = engine.brand_share_filter(
-                params["bd_segment"],
+                resolved_value,
                 threshold=params.get("threshold", 5.0),
                 mode=params.get("mode", "above"),
+                category_type=category_type,
             )
 
         elif intent == "compare_brands":
@@ -1896,11 +1938,12 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             )
 
         elif intent == "segment_month_brand_breakdown":
-            bd_segment = params.get("bd_segment")
-            if bd_segment:
-                bd_segment = resolve_bd_segment_name(bd_segment)
-            result = engine.segment_month_brand_breakdown(
-                bd_segment=bd_segment, top_n_brands=params.get("top_n_brands")
+            primary_dim = DIMENSIONS.get(params.get("primary_dimension", "bd_segment"), COL_BD_SEGMENT)
+            primary_value = params.get("primary_value")
+            if primary_value:
+                primary_value = fuzzy_resolve_value(str(primary_value), primary_dim)
+            result = engine.dimension_month_brand_breakdown(
+                primary_dim, primary_value=primary_value, top_n_brands=params.get("top_n_brands")
             )
 
         elif intent == "cross_tab_matrix":
@@ -1932,9 +1975,10 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             compare_brand = params.get("compare_brand")
             if compare_brand:
                 compare_brand = resolve_brand_name(compare_brand)
-            bd_segment = resolve_bd_segment_name(params["bd_segment"])
-            result = engine.segment_top_brands_with_shop_and_compare(
-                bd_segment, top_n=params.get("top_n", 20), compare_brand=compare_brand,
+            primary_dim = DIMENSIONS.get(params.get("primary_dimension", "bd_segment"), COL_BD_SEGMENT)
+            primary_value = fuzzy_resolve_value(str(params["primary_value"]), primary_dim)
+            result = engine.dimension_top_brands_with_shop_and_compare(
+                primary_dim, primary_value, top_n=params.get("top_n", 20), compare_brand=compare_brand,
             )
 
         elif intent == "brand_growth_breakdown":
@@ -2033,7 +2077,10 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             result = engine.brand_ranking(params["brand_name"])
 
         elif intent == "brands_in_bd_segment":
-            result = engine.brands_in_bd_segment(params["brand_name"], top_n=params.get("top_n", 15))
+            scope_col = COL_COMPANY if params.get("scope_type") == "company" else COL_BD_SEGMENT
+            result = engine.brands_in_bd_segment(
+                params["brand_name"], top_n=params.get("top_n", 15), scope_col=scope_col
+            )
 
         elif intent == "company_report":
             company_name = params.get("company_name")

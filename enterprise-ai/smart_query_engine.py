@@ -162,13 +162,12 @@ class SmartQueryEngine:
     # e) Leading (>=threshold%) or long-tail (<threshold%) brands
     #    Fixed to use ONLY "BD Segment" as the category dimension.
     # ------------------------------------------------------------------
-    def brand_share_filter(self, bd_segment: str, threshold: float = 5.0, mode: str = 'above'):
+    def brand_share_filter(self, category_value: str, threshold: float = 5.0, mode: str = 'above', category_type: str = 'bd_segment'):
         df = self.df
-        category_type = 'bd_segment'
-
-        sub = df[df[category_type].str.upper() == bd_segment.upper()]
+        sub = df[df[category_type].astype(str).str.upper() == str(category_value).upper()]
         if sub.empty:
-            return {'found': False, 'message': f'{category_type} "{bd_segment}" not found.'}
+            return {'found': False, 'message': f'{category_type} "{category_value}" not found.'}
+        canonical_value = sub[category_type].iloc[0]
 
         cat_total = sub['sale_qty_in_box'].sum()
         brand_pct = (sub.groupby('brand_name_as_per_company_data')['sale_qty_in_box'].sum()
@@ -179,7 +178,7 @@ class SmartQueryEngine:
         return {
             'found': True,
             'category_type': category_type,
-            'category_value': bd_segment,
+            'category_value': canonical_value,
             'category_total_sale': int(cat_total),
             'mode': mode,
             'threshold': threshold,
@@ -412,18 +411,24 @@ class SmartQueryEngine:
     # k) List ALL brands within the same bd_segment as a given brand
     #    (e.g. "Royal Ace ke segment mein baaki brands kaunse hain")
     # ------------------------------------------------------------------
-    def brands_in_bd_segment(self, brand_name: str, top_n: int = 15):
+    def brands_in_bd_segment(self, brand_name: str, top_n: int = 15, scope_col: str = 'bd_segment'):
+        """Finds a brand's 'sibling' brands within the SAME scope --
+        default is bd_segment (brand's own category), but can also be
+        'company_name' (all OTHER brands made by the SAME company). NOTE:
+        department/tse/shop don't apply here -- a brand isn't "owned" by
+        one department/TSE/shop the way it's owned by one segment/company
+        (it can be sold across MANY departments/TSEs/shops at once)."""
         df = self.df
         sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
         if sub.empty:
             return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
 
-        bd_seg = sub['bd_segment'].unique()
-        same_seg = df[df['bd_segment'].isin(bd_seg)]
+        scope_vals = sub[scope_col].unique()
+        same_scope = df[df[scope_col].isin(scope_vals)]
 
-        ranking = (same_seg.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+        ranking = (same_scope.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
                    .sum().sort_values(ascending=False))
-        seg_total = ranking.sum()
+        scope_total = ranking.sum()
 
         rows = []
         for rank, (brand, qty) in enumerate(ranking.head(top_n).items(), start=1):
@@ -431,16 +436,17 @@ class SmartQueryEngine:
                 'rank': rank,
                 'brand': brand,
                 'sale_qty': int(qty),
-                'pct_within_bd_segment': float(round(qty / seg_total * 100, 2)),
+                'pct_within_scope': float(round(qty / scope_total * 100, 2)),
                 'is_queried_brand': brand.upper() == brand_name.upper(),
             })
 
         return {
             'found': True,
             'brand_queried': brand_name,
-            'bd_segment': list(bd_seg),
-            'total_brands_in_bd_segment': len(ranking),
-            'bd_segment_total_sale': int(seg_total),
+            'scope_type': scope_col,
+            'scope_value': list(scope_vals),
+            'total_brands_in_scope': len(ranking),
+            'scope_total_sale': int(scope_total),
             'brands': rows,
         }
 
@@ -1186,19 +1192,21 @@ class SmartQueryEngine:
     #     multiple segments and months at once, unlike our other reports
     #     which are scoped to one segment/brand.
     # ------------------------------------------------------------------
-    def segment_month_brand_breakdown(self, bd_segment: str = None, top_n_brands: int = None):
-        """PIVOT-style report: one row per (BD Segment, Brand), with EACH
-        month's sale as a SEPARATE column (e.g. 'Apr-26 Sale', 'May-26
-        Sale'), plus a 'Total' column (sum across the whole period) and
-        'Brand % of Total Segment' (that brand's share of the segment's
-        TOTAL sale across the whole period, not per-month)."""
+    def dimension_month_brand_breakdown(self, primary_col: str, primary_value: str = None, top_n_brands: int = None):
+        """GENERALIZED pivot report: works for ANY primary dimension
+        (bd_segment, company_name, department, salesman_tse) -- one row
+        per (primary dimension value, Brand), with EACH month's sale as a
+        SEPARATE column (e.g. 'Apr-26 Sale', 'May-26 Sale'), plus a
+        'Total' column (sum across the whole period) and 'Brand % of
+        Total [dimension]' (that brand's share of the TOTAL sale across
+        the whole period, not per-month)."""
         df = self.df
-        canonical_segment = None
-        if bd_segment:
-            mask = df['bd_segment'].astype(str).str.upper() == str(bd_segment).upper()
+        canonical_value = None
+        if primary_value:
+            mask = df[primary_col].astype(str).str.upper() == str(primary_value).upper()
             if not mask.any():
-                return {'found': False, 'message': f'"{bd_segment}" not found in bd_segment.'}
-            canonical_segment = df.loc[mask, 'bd_segment'].iloc[0]
+                return {'found': False, 'message': f'"{primary_value}" not found in {primary_col}.'}
+            canonical_value = df.loc[mask, primary_col].iloc[0]
             df = df[mask]
 
         if df.empty:
@@ -1210,41 +1218,43 @@ class SmartQueryEngine:
                          key=lambda m: pd.to_datetime(m, format='%b-%y', errors='coerce'))
         month_cols = [f'{m} Sale' for m in months]
 
-        # Segment's TOTAL sale across the WHOLE period (all months combined)
-        # -- the denominator for "Brand % of Total Segment".
-        segment_totals = df.groupby('bd_segment')['sale_qty_in_box'].sum()
+        # Primary dimension's TOTAL sale across the WHOLE period (all
+        # months combined) -- the denominator for "Brand % of Total".
+        primary_totals = df.groupby(primary_col)['sale_qty_in_box'].sum()
 
-        pivot = df.pivot_table(index=['bd_segment', 'brand_name_as_per_company_data'],
+        pivot = df.pivot_table(index=[primary_col, 'brand_name_as_per_company_data'],
                                 columns='month', values='sale_qty_in_box',
                                 aggfunc='sum', fill_value=0)
         pivot = pivot.reindex(columns=months, fill_value=0)
 
         rows = []
-        for (seg, brand), row_data in pivot.iterrows():
+        for (val, brand), row_data in pivot.iterrows():
             total_qty = int(row_data.sum())
-            seg_total = int(segment_totals.get(seg, 0))
-            pct = float(round(total_qty / seg_total * 100, 2)) if seg_total else 0.0
+            val_total = int(primary_totals.get(val, 0))
+            pct = float(round(total_qty / val_total * 100, 2)) if val_total else 0.0
 
             row = {}
-            if canonical_segment is None:
-                row['bd_segment'] = seg
+            if canonical_value is None:
+                # Multiple values of this dimension are covered -- it
+                # VARIES row to row here, so it's genuinely useful info.
+                row[primary_col] = val
             row['brand'] = brand
             for m, col_label in zip(months, month_cols):
                 row[col_label] = int(row_data[m])
             row['Total'] = total_qty
-            row['brand_pct_of_total_segment'] = pct
+            row['brand_pct_of_total'] = pct
             rows.append(row)
 
-        # Sort by Total descending within each segment, cap to top_n_brands
-        # PER segment (not overall) -- otherwise one huge segment would
-        # crowd out smaller ones entirely.
-        rows.sort(key=lambda r: (r.get('bd_segment', ''), -r['Total']))
+        # Sort by Total descending within each primary-value group, cap to
+        # top_n_brands PER group (not overall) -- otherwise one huge group
+        # would crowd out smaller ones entirely.
+        rows.sort(key=lambda r: (r.get(primary_col, ''), -r['Total']))
         if top_n_brands:
             capped_rows = []
             current_key = None
             count_in_group = 0
             for r in rows:
-                key = r.get('bd_segment', canonical_segment)
+                key = r.get(primary_col, canonical_value)
                 if key != current_key:
                     current_key = key
                     count_in_group = 0
@@ -1254,8 +1264,8 @@ class SmartQueryEngine:
             rows = capped_rows
 
         result = {'found': True, '__show_full__': True}
-        if canonical_segment is not None:
-            result['bd_segment'] = canonical_segment
+        if canonical_value is not None:
+            result[primary_col] = canonical_value
         result['brand_month_breakdown'] = rows
         return result
 
@@ -1327,46 +1337,49 @@ class SmartQueryEngine:
     #    brand's segment-share at that shop, and what 8PM's segment-share
     #    is at that SAME shop" -- a nested drill-down comparison.
     # ------------------------------------------------------------------
-    def segment_top_brands_with_shop_and_compare(self, bd_segment: str, top_n: int = 20,
-                                                   compare_brand: str = None):
+    def dimension_top_brands_with_shop_and_compare(self, primary_col: str, primary_value: str, top_n: int = 20,
+                                                     compare_brand: str = None):
+        """GENERALIZED version -- works for ANY primary dimension
+        (bd_segment, company_name, department, salesman_tse), not just
+        bd_segment."""
         df = self.df
-        segment_df = df[df['bd_segment'].str.upper() == bd_segment.upper()]
-        if segment_df.empty:
-            return {'found': False, 'message': f'"{bd_segment}" not found in bd_segment.'}
-        canonical_segment = segment_df['bd_segment'].iloc[0]
+        scope_df = df[df[primary_col].astype(str).str.upper() == str(primary_value).upper()]
+        if scope_df.empty:
+            return {'found': False, 'message': f'"{primary_value}" not found in {primary_col}.'}
+        canonical_value = scope_df[primary_col].iloc[0]
 
-        # Segment-level summary (shown ONCE, above the per-brand table) --
-        # total sale of the whole segment + its share of the overall market
+        # Scope-level summary (shown ONCE, above the per-brand table) --
+        # total sale of the whole scope + its share of the overall market
         # + the overall market total itself (for direct comparison).
-        segment_total_qty = int(segment_df['sale_qty_in_box'].sum())
+        scope_total_qty = int(scope_df['sale_qty_in_box'].sum())
         overall_total_market = int(self.total_market)
-        segment_pct_of_market = (
-            float(round(segment_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
+        scope_pct_of_market = (
+            float(round(scope_total_qty / self.total_market * 100, 2)) if self.total_market else 0.0
         )
 
-        top_brands = (segment_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
+        top_brands = (scope_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
                       .sum().sort_values(ascending=False).head(top_n))
 
         # Compare brand's TRUE overall stats (its total across ALL shops/
-        # segments, not scoped to any one shop) -- shown ONCE at top level
+        # scopes, not scoped to any one shop) -- shown ONCE at top level
         # since it doesn't change per-row. This answers "how big is this
         # brand OVERALL", separate from "how much of it sells at brand X's
         # top shop specifically" (which the per-row fields below cover).
         compare_brand_overall_qty = None
         compare_brand_overall_pct_of_market = None
-        compare_brand_overall_pct_of_segment = None
+        compare_brand_overall_pct_of_scope = None
         if compare_brand:
             comp_all = df[df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
             compare_brand_overall_qty = int(comp_all['sale_qty_in_box'].sum())
             compare_brand_overall_pct_of_market = (
                 round(compare_brand_overall_qty / self.total_market * 100, 2) if self.total_market else 0.0
             )
-            comp_in_segment_qty = int(
-                segment_df[segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
+            comp_in_scope_qty = int(
+                scope_df[scope_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
                 ['sale_qty_in_box'].sum()
             )
-            compare_brand_overall_pct_of_segment = (
-                round(comp_in_segment_qty / segment_total_qty * 100, 2) if segment_total_qty else 0.0
+            compare_brand_overall_pct_of_scope = (
+                round(comp_in_scope_qty / scope_total_qty * 100, 2) if scope_total_qty else 0.0
             )
 
         # FIXED (not dynamic) column keys -- the compare_brand's actual name
@@ -1374,12 +1387,12 @@ class SmartQueryEngine:
         # short, clean, constant labels instead of repeating the full brand
         # name in every column header.
         qty_key = 'compare_brand_qty_at_shop'
-        seg_pct_key = 'segment_pct_at_shop'
+        seg_pct_key = 'scope_pct_at_shop'
         market_pct_key = 'total_market_share'
 
         rows = []
         for brand, brand_total_qty in top_brands.items():
-            brand_df = segment_df[segment_df['brand_name_as_per_company_data'] == brand]
+            brand_df = scope_df[scope_df['brand_name_as_per_company_data'] == brand]
             shop_qty = (brand_df.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
                         .sum().sort_values(ascending=False))
             if shop_qty.empty:
@@ -1387,12 +1400,12 @@ class SmartQueryEngine:
             top_shop_code, top_shop_name = shop_qty.index[0]
             brand_qty_at_shop = int(shop_qty.iloc[0])
 
-            # Segment total AT THIS SPECIFIC SHOP (denominator for % share)
-            shop_segment_total = int(
-                segment_df[segment_df['shop_code'] == top_shop_code]['sale_qty_in_box'].sum()
+            # Scope total AT THIS SPECIFIC SHOP (denominator for % share)
+            shop_scope_total = int(
+                scope_df[scope_df['shop_code'] == top_shop_code]['sale_qty_in_box'].sum()
             )
             brand_pct_at_shop = (
-                round(brand_qty_at_shop / shop_segment_total * 100, 2) if shop_segment_total else 0.0
+                round(brand_qty_at_shop / shop_scope_total * 100, 2) if shop_scope_total else 0.0
             )
             # This brand's OWN overall total-market share % (not scoped to
             # this one shop) -- so both the top brand AND the compare brand
@@ -1403,20 +1416,20 @@ class SmartQueryEngine:
 
             row = {
                 'brand': brand,
-                'brand_total_qty_in_segment': int(brand_total_qty),
+                'brand_total_qty_in_scope': int(brand_total_qty),
                 'top_shop_name': top_shop_name,
                 'brand_qty_at_shop': brand_qty_at_shop,
-                'brand_segment_pct_at_shop': brand_pct_at_shop,
+                'brand_scope_pct_at_shop': brand_pct_at_shop,
                 'brand_total_market_share': brand_overall_market_pct,
             }
 
             if compare_brand:
-                comp_df = segment_df[
-                    (segment_df['shop_code'] == top_shop_code) &
-                    (segment_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
+                comp_df = scope_df[
+                    (scope_df['shop_code'] == top_shop_code) &
+                    (scope_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
                 ]
                 comp_qty = int(comp_df['sale_qty_in_box'].sum())
-                comp_seg_pct = float(round(comp_qty / shop_segment_total * 100, 2)) if shop_segment_total else 0.0
+                comp_seg_pct = float(round(comp_qty / shop_scope_total * 100, 2)) if shop_scope_total else 0.0
                 comp_market_pct = float(round(comp_qty / self.total_market * 100, 2)) if self.total_market else 0.0
                 row[qty_key] = comp_qty
                 row[seg_pct_key] = comp_seg_pct
@@ -1426,14 +1439,14 @@ class SmartQueryEngine:
 
         return {
             'found': True,
-            'bd_segment': canonical_segment,
-            'segment_total_sale': segment_total_qty,
+            primary_col: canonical_value,
+            'scope_total_sale': scope_total_qty,
             'overall_total_market': overall_total_market,
-            'segment_pct_of_overall_market': segment_pct_of_market,
+            'scope_pct_of_overall_market': scope_pct_of_market,
             'compare_brand': compare_brand,
             'compare_brand_overall_qty': compare_brand_overall_qty,
             'compare_brand_overall_pct_of_market': compare_brand_overall_pct_of_market,
-            'compare_brand_overall_pct_of_segment': compare_brand_overall_pct_of_segment,
+            'compare_brand_overall_pct_of_scope': compare_brand_overall_pct_of_scope,
             'top_brands': rows,
         }
 
