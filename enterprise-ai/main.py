@@ -1328,7 +1328,52 @@ def resolve_month_reference(value: str) -> str:
     return normalized_value
 
 
+# Words that should NEVER be an actual filter VALUE -- these are dimension
+# NAMES, metric/verb words, or question words. No real brand/shop/company
+# name in this dataset is literally "brand", "sell", or "which" -- so if
+# the parser ever puts one of these as a filter value (a known recurring
+# LLM mistake with terse/keyword-list style queries), it's a CERTAIN
+# mistake, not ambiguity. Auto-correcting this here (moving it to group_by
+# instead) is a permanent, code-level fix -- it catches EVERY future
+# phrasing variation automatically, instead of needing a new prompt
+# example added every time a new wording trips up the parser.
+NON_VALUE_WORDS = {
+    'brand', 'brands', 'tse', 'month', 'months', 'company', 'companies',
+    'department', 'departments', 'shop', 'shops', 'party', 'parties',
+    'segment', 'segments', 'bd_segment', 'liquor_type', 'pack_size',
+    'category', 'shop_code', 'sale', 'sales', 'sell', 'sold', 'selling',
+    'quantity', 'qty', 'total', 'which', 'kaunsa', 'kaun', 'konsa',
+    'kya', 'wise',
+}
+
+
+def _is_non_value_phrase(value: str) -> bool:
+    """True if EVERY word in the value is a dimension-name/verb/question
+    word (meaning the WHOLE phrase is meta-talk, not a real named entity).
+    A real shop name like 'Mayur Vihar Shop' has 'mayur'/'vihar' which
+    ISN'T in the word list, so it's correctly left alone -- but "which
+    brand" is ENTIRELY made of such words, so it's caught."""
+    words = value.strip().lower().split()
+    return bool(words) and all(w in NON_VALUE_WORDS for w in words)
+
+
+def _autocorrect_filter_group_by_confusion(spec: dict):
+    """If any filter's VALUE is literally a dimension-name/verb/question
+    word or PHRASE (never a real value in this data), move that dimension
+    to group_by instead of leaving it as a (guaranteed-wrong) filter."""
+    filters = spec.get("filters") or {}
+    group_by = spec.get("group_by") or []
+    for dim in list(filters.keys()):
+        if _is_non_value_phrase(str(filters[dim])):
+            del filters[dim]
+            if dim not in group_by:
+                group_by.append(dim)
+    spec["filters"] = filters
+    spec["group_by"] = group_by
+
+
 def run_query(spec: dict, working_df=None):
+    _autocorrect_filter_group_by_confusion(spec)
     filtered = working_df if working_df is not None else df
 
     # Apply filters -- each value is first fuzzy-resolved to the closest
@@ -1346,6 +1391,22 @@ def run_query(spec: dict, working_df=None):
                     options = value.split(":", 1)[1]
                     return (f"🤔 '{original_value}' ke liye {len(options.split(','))} saal ka data mila "
                             f"({options}) -- konsa chahiye? Saal ke saath batao, jaise 'April 2026'.")
+            if dim == "party":
+                # Shop/location references often match MULTIPLE distinct
+                # shops (e.g. "Mayur Vihar" matches 12 different outlets)
+                # -- include ALL of them (not just the highest-selling
+                # one), and auto-add "party" to group_by so the reply
+                # shows a shop-wise split instead of silently collapsing
+                # 12 shops' data into one blended number.
+                all_matches = fuzzy_resolve_multi_match(str(value), col)
+                if all_matches:
+                    filtered = filtered[filtered[col].isin(all_matches)]
+                    if len(all_matches) > 1:
+                        group_by_list = spec.get("group_by") or []
+                        if "party" not in group_by_list:
+                            group_by_list.append("party")
+                            spec["group_by"] = group_by_list
+                    continue
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
@@ -1576,6 +1637,56 @@ def fuzzy_resolve_value(user_value: str, column) -> str:
 
     # Nothing close enough -- let the caller's own not-found handling report it
     return user_value
+
+
+# Generic descriptor words that aren't part of an actual shop/location
+# name -- users often add these as filler ("Mayur Vihar SHOP", "XYZ
+# dukaan") even though the real shop name never literally contains them.
+# Stripping them before matching avoids missing otherwise-clear matches.
+GENERIC_LOCATION_WORDS = {'shop', 'shops', 'dukaan', 'theka', 'vend', 'store', 'outlet'}
+
+
+def _strip_generic_location_words(value: str) -> str:
+    words = value.split()
+    filtered = [w for w in words if w.lower() not in GENERIC_LOCATION_WORDS]
+    stripped = " ".join(filtered).strip()
+    return stripped if stripped else value
+
+
+def fuzzy_resolve_multi_match(user_value: str, column) -> list:
+    """Like fuzzy_resolve_value's substring tier, but returns ALL distinct
+    matching values instead of silently picking just the single highest-
+    volume one. Important for shop/location references: "Mayur Vihar"
+    genuinely matches MANY distinct physical shops -- silently narrowing to
+    just 1 (as fuzzy_resolve_value does) throws away real data the user
+    almost certainly wanted included. Falls back to fuzzy_resolve_value's
+    full 5-tier single-match logic (wrapped in a list) if no substring
+    match is found even after stripping generic words, so this is never
+    LESS capable than the original single-match resolver."""
+    if df.empty or not user_value or column not in df.columns:
+        return []
+    search_value = _strip_generic_location_words(user_value)
+
+    col_series = df[column].astype(str)
+    unique_values = col_series.unique()
+
+    upper_to_actual = {}
+    for v in unique_values:
+        upper_to_actual.setdefault(v.upper(), v)
+    if search_value.upper() in upper_to_actual:
+        return [upper_to_actual[search_value.upper()]]
+
+    contains_mask = col_series.str.contains(search_value, case=False, na=False, regex=False)
+    if contains_mask.any():
+        matches = df.loc[contains_mask]
+        ranked = matches.groupby(column)[COL_QTY].sum().sort_values(ascending=False)
+        return list(ranked.index)
+
+    # Nothing matched even after stripping filler words -- fall back to the
+    # full 5-tier single-match resolver (normalized/fuzzy/prefix matching)
+    # rather than giving up entirely.
+    fallback = fuzzy_resolve_value(search_value, column)
+    return [fallback] if fallback else []
 
 
 def resolve_brand_name(partial_name: str) -> str:
