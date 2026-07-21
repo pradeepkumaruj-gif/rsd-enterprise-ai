@@ -1407,6 +1407,15 @@ def run_query(spec: dict, working_df=None):
                             group_by_list.append("party")
                             spec["group_by"] = group_by_list
                     continue
+            if dim == "brand":
+                # Same ambiguity risk as specialized intents (e.g. "Royal"
+                # matches 13 different products) -- use resolve_brand_name
+                # (which raises BrandAmbiguityError on genuine ambiguity)
+                # instead of the plain fuzzy_resolve_value, so the GENERIC
+                # engine gets the same protection specialized intents do.
+                resolved_value = resolve_brand_name(str(value))
+                filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
+                continue
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
