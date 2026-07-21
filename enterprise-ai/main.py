@@ -1689,7 +1689,48 @@ def fuzzy_resolve_multi_match(user_value: str, column) -> list:
     return [fallback] if fallback else []
 
 
+class BrandAmbiguityError(Exception):
+    """Raised when a partial brand search term matches MULTIPLE distinct
+    brands (e.g. "Royal" matches 13 different products: Royal Ace, Royal
+    Arms, Royal Black...). Unlike shop/location references (where multiple
+    matches are genuinely the SAME area and should be combined), different
+    brands are DIFFERENT PRODUCTS -- silently picking one, or worse,
+    combining their sales into one number, would be misleading. Raised as
+    an exception (not a return value) so it propagates up through ANY
+    intent-handling code path without needing every individual call site
+    to be modified -- caught ONCE, centrally, in the /chat endpoint."""
+    def __init__(self, search_term, options):
+        self.search_term = search_term
+        self.options = options
+        super().__init__(f"Ambiguous brand: {search_term}")
+
+
 def resolve_brand_name(partial_name: str) -> str:
+    if df.empty or not partial_name:
+        return fuzzy_resolve_value(partial_name, COL_BRAND)
+
+    col_series = df[COL_BRAND].astype(str)
+    unique_values = col_series.unique()
+    upper_to_actual = {}
+    for v in unique_values:
+        upper_to_actual.setdefault(v.upper(), v)
+
+    # Exact match is NEVER ambiguous, even if it's also a substring of
+    # other brands -- the user typed the complete, correct name.
+    if partial_name.upper() in upper_to_actual:
+        return upper_to_actual[partial_name.upper()]
+
+    contains_mask = col_series.str.contains(partial_name, case=False, na=False, regex=False)
+    if contains_mask.any():
+        matches = df.loc[contains_mask]
+        ranked = matches.groupby(COL_BRAND)[COL_QTY].sum().sort_values(ascending=False)
+        if len(ranked) > 1:
+            raise BrandAmbiguityError(partial_name, list(ranked.index[:10]))
+        return ranked.index[0]
+
+    # No substring match -- fall through to the normal 5-tier resolver
+    # (normalized/fuzzy/prefix matching handles typos, "&" vs "and", etc.)
+    # which only ever returns ONE value by design, so no ambiguity risk there.
     return fuzzy_resolve_value(partial_name, COL_BRAND)
 
 
@@ -2375,6 +2416,13 @@ def chat(request: ChatRequest):
                 data = run_special_intent(intent, spec.get("params") or {}, working_df=working_df)
             last_error = None
             break  # success -- stop retrying
+        except BrandAmbiguityError as e:
+            # Real ambiguity, not a transient failure -- retrying won't
+            # help, so respond immediately with the matching options
+            # instead of burning a retry attempt or giving a generic error.
+            options_str = ", ".join(e.options)
+            return {"reply": (f"🤔 '{e.search_term}' se {len(e.options)} alag brands match hote hain: "
+                               f"{options_str}. Konsa specifically chahiye?")}
         except Exception as e:
             last_error = e
             print(f"Query run failed (attempt {attempt + 1}): {e}")
