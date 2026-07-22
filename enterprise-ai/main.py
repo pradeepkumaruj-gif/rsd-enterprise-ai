@@ -167,6 +167,8 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
 {{
   "query_understood": true,
   "clarification_needed": null,
+  "is_multi_step": false,
+  "sub_queries": [],
   "intent": "generic",
   "metric": "sum",
   "group_by": ["dimension1", "dimension2"],
@@ -179,6 +181,22 @@ User ke sawaal ko is JSON format mein todo (SIRF JSON return karo, kuch aur nahi
   "month_filter": null,
   "params": {{}}
 }}
+
+⚠️ MULTI-STEP QUERIES -- agar user EK saath MULTIPLE INDEPENDENT questions poochta hai (jaise
+"Dennis ki May sale AUR Royal Ace ki May sale dono batao", "X ka total kya hai aur Y ka kitna
+hai", "Dennis aur Royal Ace dono ka April profile do"), set karo:
+  "is_multi_step": true,
+  "sub_queries": ["Dennis ki May sale kya hai", "Royal Ace ki May sale kya hai"]
+Har ek sub_query APNE AAP MEIN COMPLETE aur INDEPENDENT honi chahiye (poora question, jaise ek
+alag user ne alag se poocha ho) -- taaki har ek ko ALAG SE, poori tarah parse kiya ja sake. Jab
+"is_multi_step": true ho, baaki fields (intent, filters, etc.) ignore ho jayenge -- sirf
+"sub_queries" use hoga.
+Agar sawaal SIRF EK cheez poochta hai (chahe woh complex/detailed cheez ho -- jaise ek brand ka
+poora profile ya ek segment ka pivot report), "is_multi_step": false hi rakho aur normal
+single-intent JSON do -- MULTI-STEP SIRF tab hai jab genuinely 2+ ALAG, INDEPENDENT sawaal ek
+saath poochein gaye hon (usually "aur"/"and" se joined, ya comma se list kiye gaye multiple
+distinct entities/questions).
+Zyada se zyada 5 sub_queries allowed hain -- agar user isse zyada poochein, sirf pehle 5 lo.
 
 "month_filter" -- UNIVERSAL field jo KISI BHI intent (generic ya specialized) ke saath kaam
 karta hai -- kisi bhi specialized function (brand_report, segment_top_brands_with_shop_and_compare,
@@ -2528,6 +2546,39 @@ def format_period_label(month_filter: dict) -> str:
     return f"{start_str} - {end_str}"
 
 
+def _solve_single_query(question: str, history: list = None) -> str:
+    """Parses and solves ONE independent question end-to-end, returning
+    ready-to-display text -- used for each part of a multi-step/multi-part
+    query (e.g. 'Dennis ki May sale aur Royal Ace ki May sale dono batao'
+    splits into 2 independent questions, each solved via this function).
+    Errors in one part are contained here and don't crash the others."""
+    try:
+        sub_spec = parse_query_with_claude(question, history=history)
+    except Exception as e:
+        return f"⚠️ Is part ko samajh nahi paya: {e}"
+
+    if not sub_spec.get("query_understood", True):
+        clarification = sub_spec.get("clarification_needed") or "Thoda specific karo."
+        return f"🤔 {clarification}"
+
+    sub_working_df = get_month_scoped_df(sub_spec.get("month_filter"))
+    try:
+        sub_intent = sub_spec.get("intent", "generic")
+        if sub_intent == "generic":
+            sub_data = run_query(sub_spec, working_df=sub_working_df)
+        else:
+            sub_data = run_special_intent(sub_intent, sub_spec.get("params") or {}, working_df=sub_working_df)
+    except BrandAmbiguityError as e:
+        options_str = ", ".join(e.options)
+        return f"🤔 '{e.search_term}' se {len(e.options)} alag {e.dimension_label} match hote hain: {options_str}."
+    except Exception as e:
+        return f"⚠️ Is part mein error aaya: {e}"
+
+    if isinstance(sub_data, dict) and "__reply__" in sub_data:
+        sub_data = sub_data["__reply__"]
+    return render_data_deterministically(sub_data)
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     if data_loading_status == "loading":
@@ -2554,6 +2605,19 @@ def chat(request: ChatRequest):
         if not spec.get("query_understood", True):
             clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
             return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
+
+        # MULTI-STEP: user asked 2+ INDEPENDENT questions in one message
+        # (e.g. "Dennis ki May sale aur Royal Ace ki May sale dono batao").
+        # Solve each sub-question independently (via _solve_single_query,
+        # same logic as a normal single query) and combine the results --
+        # one part failing doesn't crash the others.
+        if spec.get("is_multi_step") and spec.get("sub_queries"):
+            sub_questions = spec["sub_queries"][:5]  # cap to prevent runaway cost
+            parts = []
+            for i, sq in enumerate(sub_questions, start=1):
+                part_text = _solve_single_query(sq, history=request.history)
+                parts.append(f"### {i}. {sq}\n\n{part_text}")
+            return {"reply": "\n\n---\n\n".join(parts)}
 
         working_df = get_month_scoped_df(spec.get("month_filter"))
         try:
