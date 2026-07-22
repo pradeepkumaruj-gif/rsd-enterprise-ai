@@ -186,6 +186,16 @@ def run_all_tests():
     royal_matches = combined[combined['brand_name_as_per_company_data'].str.contains('ROYAL', case=False, na=False)]['brand_name_as_per_company_data'].nunique()
     t.check_true("'Royal' still matches multiple distinct brands (ambiguity check still relevant)", royal_matches > 1)
 
+    print("\n--- TSE Ambiguity Data Property (regression guard) ---")
+    # Same reasoning as the brand ambiguity guard above -- "Kumar" and
+    # "Sharma" must still match MULTIPLE distinct TSEs for the
+    # resolve_tse_name ambiguity check in main.py to be relevant, while
+    # "Sunil" (a unique first name) must match exactly 1.
+    kumar_matches = combined[combined['salesman_tse'].str.contains('Kumar', case=False, na=False)]['salesman_tse'].nunique()
+    t.check_true("'Kumar' still matches multiple distinct TSEs (ambiguity check still relevant)", kumar_matches > 1)
+    sunil_matches = combined[combined['salesman_tse'].str.contains('Sunil', case=False, na=False)]['salesman_tse'].nunique()
+    t.check("'Sunil' matches exactly 1 TSE (should resolve without clarification)", sunil_matches, 1)
+
     return t.summary()
 
 

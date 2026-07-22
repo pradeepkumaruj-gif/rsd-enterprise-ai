@@ -1416,6 +1416,12 @@ def run_query(spec: dict, working_df=None):
                 resolved_value = resolve_brand_name(str(value))
                 filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
                 continue
+            if dim == "tse":
+                # Same ambiguity risk as brand -- e.g. bare "Kumar" matches
+                # 3 different TSEs (Ravinder Kumar, Raj kumar, Lalit Kumar).
+                resolved_value = resolve_tse_name(str(value))
+                filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
+                continue
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
@@ -1699,48 +1705,71 @@ def fuzzy_resolve_multi_match(user_value: str, column) -> list:
 
 
 class BrandAmbiguityError(Exception):
-    """Raised when a partial brand search term matches MULTIPLE distinct
-    brands (e.g. "Royal" matches 13 different products: Royal Ace, Royal
-    Arms, Royal Black...). Unlike shop/location references (where multiple
-    matches are genuinely the SAME area and should be combined), different
-    brands are DIFFERENT PRODUCTS -- silently picking one, or worse,
-    combining their sales into one number, would be misleading. Raised as
-    an exception (not a return value) so it propagates up through ANY
-    intent-handling code path without needing every individual call site
-    to be modified -- caught ONCE, centrally, in the /chat endpoint."""
-    def __init__(self, search_term, options):
+    """Raised when a partial search term matches MULTIPLE distinct values
+    of a dimension where combining/picking-one would be misleading (e.g.
+    "Royal" matches 13 different brands, "Sharma" matches 2 different
+    TSEs). Unlike shop/location references (where multiple matches are
+    genuinely the SAME area and should be combined), different brands are
+    different PRODUCTS and different TSEs are different PEOPLE -- silently
+    picking one, or combining their sales into one number, would be
+    misleading. Raised as an exception (not a return value) so it
+    propagates up through ANY intent-handling code path without needing
+    every individual call site to be modified -- caught ONCE, centrally,
+    in the /chat endpoint. (Kept this name for backward compatibility even
+    though it's now used for TSE ambiguity too, not just brands.)"""
+    def __init__(self, search_term, options, dimension_label="brand"):
         self.search_term = search_term
         self.options = options
-        super().__init__(f"Ambiguous brand: {search_term}")
+        self.dimension_label = dimension_label
+        super().__init__(f"Ambiguous {dimension_label}: {search_term}")
 
 
-def resolve_brand_name(partial_name: str) -> str:
+def _resolve_with_ambiguity_check(partial_name: str, column: str, dimension_label: str) -> str:
+    """Shared resolution logic used by resolve_brand_name and
+    resolve_tse_name: exact match always wins (never ambiguous); if a
+    substring match hits MULTIPLE distinct values, raise
+    BrandAmbiguityError instead of silently picking the highest-volume
+    one; otherwise fall back to the full 5-tier fuzzy_resolve_value for
+    typo-tolerance (which only ever returns ONE value, so no ambiguity
+    risk there)."""
     if df.empty or not partial_name:
-        return fuzzy_resolve_value(partial_name, COL_BRAND)
+        return fuzzy_resolve_value(partial_name, column)
 
-    col_series = df[COL_BRAND].astype(str)
+    col_series = df[column].astype(str)
     unique_values = col_series.unique()
     upper_to_actual = {}
     for v in unique_values:
         upper_to_actual.setdefault(v.upper(), v)
 
     # Exact match is NEVER ambiguous, even if it's also a substring of
-    # other brands -- the user typed the complete, correct name.
+    # other values -- the user typed the complete, correct name.
     if partial_name.upper() in upper_to_actual:
         return upper_to_actual[partial_name.upper()]
 
     contains_mask = col_series.str.contains(partial_name, case=False, na=False, regex=False)
     if contains_mask.any():
         matches = df.loc[contains_mask]
-        ranked = matches.groupby(COL_BRAND)[COL_QTY].sum().sort_values(ascending=False)
+        ranked = matches.groupby(column)[COL_QTY].sum().sort_values(ascending=False)
         if len(ranked) > 1:
-            raise BrandAmbiguityError(partial_name, list(ranked.index[:10]))
+            raise BrandAmbiguityError(partial_name, list(ranked.index[:10]), dimension_label)
         return ranked.index[0]
 
-    # No substring match -- fall through to the normal 5-tier resolver
-    # (normalized/fuzzy/prefix matching handles typos, "&" vs "and", etc.)
-    # which only ever returns ONE value by design, so no ambiguity risk there.
-    return fuzzy_resolve_value(partial_name, COL_BRAND)
+    return fuzzy_resolve_value(partial_name, column)
+
+
+def resolve_brand_name(partial_name: str) -> str:
+    return _resolve_with_ambiguity_check(partial_name, COL_BRAND, "brand")
+
+
+def resolve_tse_name(partial_name: str) -> str:
+    """Same ambiguity protection as resolve_brand_name, for TSE names --
+    e.g. bare "Kumar" matches 3 different TSEs (Ravinder Kumar, Raj kumar,
+    Lalit Kumar), "Singh" matches 2 (Malkit Singh, Sher Singh), "Sharma"
+    matches 2 (Sunil Sharma, Ram Gopal Sharma) -- these ask for
+    clarification. Unique first/last names (Sunil, Ravinder, Ankush, Raj,
+    Sher, Shammi, Kapoor, Ram, Gopal, Lalit, Thapa, Malkit, Sumit) resolve
+    straight through since each matches only ONE TSE."""
+    return _resolve_with_ambiguity_check(partial_name, COL_TSE, "TSE")
 
 
 def resolve_bd_segment_name(partial_name: str) -> str:
@@ -1893,12 +1922,20 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             dim_col = DIMENSIONS.get(params.get("dimension"))
             if not dim_col:
                 return "Valid dimension chahiye (department, shop_code, party, tse, bd_segment, liquor_type, ya pack_size)."
-            resolved_values = [fuzzy_resolve_value(str(v), dim_col) for v in params["values"]]
+
+            def _resolve_dim_value(v, col):
+                if col == COL_TSE:
+                    return resolve_tse_name(str(v))
+                if col == COL_BRAND:
+                    return resolve_brand_name(str(v))
+                return fuzzy_resolve_value(str(v), col)
+
+            resolved_values = [_resolve_dim_value(v, dim_col) for v in params["values"]]
             resolved_scope_filters = {}
             for dim, val in (params.get("scope_filters") or {}).items():
                 scope_col = DIMENSIONS.get(dim)
                 if scope_col:
-                    resolved_scope_filters[scope_col] = fuzzy_resolve_value(str(val), scope_col)
+                    resolved_scope_filters[scope_col] = _resolve_dim_value(val, scope_col)
             engine_result = engine.compare_dimension_values(
                 dim_col, resolved_values, scope_filters=resolved_scope_filters or None
             )
@@ -2430,7 +2467,7 @@ def chat(request: ChatRequest):
             # help, so respond immediately with the matching options
             # instead of burning a retry attempt or giving a generic error.
             options_str = ", ".join(e.options)
-            return {"reply": (f"🤔 '{e.search_term}' se {len(e.options)} alag brands match hote hain: "
+            return {"reply": (f"🤔 '{e.search_term}' se {len(e.options)} alag {e.dimension_label} match hote hain: "
                                f"{options_str}. Konsa specifically chahiye?")}
         except Exception as e:
             last_error = e
