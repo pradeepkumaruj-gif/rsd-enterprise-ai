@@ -118,6 +118,11 @@ def get_current_and_previous_month_df():
 
 class ChatRequest(BaseModel):
     message: str
+    history: list = []  # optional: [{"role": "user"|"assistant", "content": "..."}, ...]
+                         # last 2-3 exchanges from the frontend, used so follow-up
+                         # questions ("April ki bhi batao") can inherit context
+                         # (brand/company/dimension) from the previous question
+                         # instead of needing everything repeated every time.
 
 
 @app.get("/")
@@ -822,6 +827,15 @@ yeh dimension use karo.
   wahi dimension rakho jo user ne bola (jaise ["party"] shop-wise ke liye).
 
 Rules:
+- ⚠️ CONVERSATION MEMORY -- agar tumhe PICHLE messages (conversation history) diye gaye hain is
+  request mein, unhe FOLLOW-UP context ke liye use karo. Jaise agar pichla sawaal "Dennis ki May
+  sale kya hai" tha, aur ab naya sawaal sirf "April ki bhi batao" hai (khud mein incomplete --
+  "April ki KISKI bhi batao?"), pichle message se "Dennis" (brand) INHERIT karo, aur naya sawaal
+  "Dennis ki April sale" jaisa treat karo. SIRF woh entities inherit karo jo NAYE sawaal mein
+  missing hain (jaise brand/company/dimension) -- jo cheez naye sawaal mein EXPLICITLY badal di
+  gayi hai (jaise "April" yahan month hai), usko naye sawaal se hi lo, purane se mat lo. Agar
+  naya sawaal khud mein COMPLETE hai (sab entities clearly bataye gaye hain), purana context
+  IGNORE karo -- sirf genuinely INCOMPLETE follow-up questions ke liye inherit karo.
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
 - ⚠️ CRITICAL -- BARE DIMENSION NAMES (jaise "brand", "tse", "month", "company") YA UNKE NATURAL
   VARIATIONS (jaise "which brand", "kaunsa brand", "brand kaun sa") KABHI FILTER VALUE NAHI HOTE,
@@ -1257,7 +1271,19 @@ def render_data_deterministically(data) -> str:
     return str(data)
 
 
-def parse_query_with_claude(question: str) -> dict:
+def parse_query_with_claude(question: str, history: list = None) -> dict:
+    messages = []
+    if history:
+        # Only the last few exchanges -- enough context for a natural
+        # follow-up question ("April ki bhi batao") without bloating every
+        # single parse call with the whole conversation. Anthropic's API
+        # requires alternating user/assistant turns starting with "user",
+        # so we filter to valid roles and keep them in order.
+        recent = [m for m in history[-6:] if m.get("role") in ("user", "assistant") and m.get("content")]
+        for m in recent:
+            messages.append({"role": m["role"], "content": str(m["content"])})
+    messages.append({"role": "user", "content": question})
+
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=700,  # schema has grown a lot (18 intents, many fields) -- 300 was
@@ -1270,7 +1296,7 @@ def parse_query_with_claude(question: str) -> dict:
                          # this was the root cause of "works sometimes, not others".
                          # temperature=0 makes output maximally deterministic/repeatable.
         system=QUERY_PARSER_SYSTEM,
-        messages=[{"role": "user", "content": question}],
+        messages=messages,
     )
     text = response.content[0].text.strip()
     text = text.replace("```json", "").replace("```", "").strip()
@@ -2509,7 +2535,7 @@ def chat(request: ChatRequest):
     last_error = None
     for attempt in range(2):
         try:
-            spec = parse_query_with_claude(request.message)
+            spec = parse_query_with_claude(request.message, history=request.history)
         except Exception as e:
             last_error = e
             print(f"Query parse failed (attempt {attempt + 1}): {e}")
