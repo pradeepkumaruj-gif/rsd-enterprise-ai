@@ -764,16 +764,22 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     standard deviations mein) -- matlab agar SAARE brands 50% grow ho rahe hain, ek brand jo
     55% grow hua woh "anomaly" NAHI hai (normal hai is context mein), lekin ek brand jo 900%
     grow hua woh HAI (statistically bahut alag baaki sabse).
-    params: {{"dimension": "brand", "z_threshold": 2.0, "min_base_qty": 50}}
+    params: {{"dimension": "brand", "z_threshold": 2.0, "min_base_qty": 50, "anomaly_type_filter": null}}
     "dimension" ho sakta hai: "brand" (default), "company", "tse", ya "department".
     "z_threshold" OPTIONAL hai (default 2.0) -- kitne standard deviations door hona chahiye
     "anomaly" maane jaane ke liye. Agar user "bahut zyada strict" ya "sirf extreme cases"
     bole, 3.0 use karo. Agar "thoda zyada sensitive" bole, 1.5 use karo.
     "min_base_qty" OPTIONAL hai (default 50) -- kam volume wale items ko exclude karta hai
     (taaki chhote numbers ka noisy % change "anomaly" na dikhe).
-    Trigger: "koi anomaly hai kya is mahine", "kaunsa brand achanak spike/drop hua",
-    "statistically unusual changes dikhao", "kaunse brands normal se bahut alag perform kar
-    rahe hain", "abnormal growth/decline kahan hai"
+    "anomaly_type_filter" OPTIONAL hai -- agar user SPECIFICALLY sirf "spike"/"badhe hue" ya
+    sirf "drop"/"gire hue" poochein (na ki dono), yahan "spike" ya "drop" daalo -- result sirf
+    usi type tak filter ho jayega (agar us type ki koi anomaly na mile, ek clear "koi X anomaly
+    nahi mili" message aayega, na ki doosre type ki anomalies confusingly dikhengi). Agar user
+    "koi bhi anomaly" ya "spike aur drop dono" poochein, yeh null hi rakho (dono types aayenge).
+    Trigger: "koi anomaly hai kya is mahine" (-> anomaly_type_filter: null), "kaunsa brand
+    achanak spike hua" (-> anomaly_type_filter: "spike"), "kaunse brands achanak DROP hue"
+    (-> anomaly_type_filter: "drop"), "statistically unusual changes dikhao", "abnormal
+    growth/decline kahan hai"
 
 Agar sawaal upar ke kisi specific intent (2-29) se match nahi karta, "generic" use karo.
 
@@ -1029,6 +1035,7 @@ FIELD_DISPLAY_LABELS = {
     'mean_pct_change': '📊 Average % Change (All Items)',
     'std_pct_change': '📊 Std Deviation (% Change)',
     'anomalies_found': '🚨 Anomalies Found',
+    'note': '📝 Note',
     'anomalies': '🚨 Anomalies',
     'item': '🥃 Item',
     'current_qty': '📦 Current Qty',
@@ -2529,15 +2536,28 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             if not anomaly_result.get("found"):
                 result = anomaly_result
             else:
+                anomalies = anomaly_result["anomalies"]
+                # If the user specifically asked for only "spike" or only
+                # "drop" anomalies, filter to JUST that type -- otherwise
+                # every anomaly (regardless of type) was shown even when
+                # the user asked specifically for one direction, which
+                # was confusing (e.g. asking for "drops" but seeing a full
+                # table of "spike" rows that don't answer the question).
+                type_filter = params.get("anomaly_type_filter")
+                if type_filter in ("spike", "drop"):
+                    anomalies = [a for a in anomalies if a["anomaly_type"] == type_filter]
                 result = {
                     "current_month": cur_label,
                     "previous_month": prev_label,
                     "total_items_analyzed": anomaly_result["total_items_analyzed"],
                     "mean_pct_change": anomaly_result["mean_pct_change"],
                     "std_pct_change": anomaly_result["std_pct_change"],
-                    "anomalies_found": anomaly_result["anomalies_found"],
-                    "anomalies": anomaly_result["anomalies"],
+                    "anomalies_found": len(anomalies),
                 }
+                if anomalies:
+                    result["anomalies"] = anomalies
+                elif type_filter:
+                    result["note"] = f"Koi '{type_filter}' type ki anomaly nahi mili is period mein."
 
         elif intent == "brand_ranking":
             result = engine.brand_ranking(params["brand_name"])
