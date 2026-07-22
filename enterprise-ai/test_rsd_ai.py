@@ -623,6 +623,20 @@ def run_all_tests():
     rs_matches = combined[combined['company_name'].str.contains('Rock and Storm', case=False, na=False)]['company_name'].nunique()
     t.check("'Rock and Storm' matches exactly 2 distinct companies (Distilleries vs Bottlers)", rs_matches, 2)
 
+    t.section("Anomaly Detection")
+    anomaly_result = t.check_timed(
+        "detect_anomalies(brand) runs",
+        lambda: SmartQueryEngine.detect_anomalies(may, apr, dimension_col='brand_name_as_per_company_data')
+    )
+    t.check_true("Anomaly detection found result", anomaly_result['found'])
+    t.check_true("Anomaly detection analyzed a reasonable number of items (>=100)",
+                 anomaly_result['total_items_analyzed'] >= 100)
+    t.check_true("At least 1 anomaly found (expected given known outlier brands in this data)",
+                 anomaly_result['anomalies_found'] >= 1)
+    # Every flagged anomaly should genuinely be >= the z_threshold (2.0 default)
+    all_above_threshold = all(abs(a['z_score']) >= 2.0 for a in anomaly_result['anomalies'])
+    t.check_true("All flagged anomalies have |z_score| >= 2.0 (threshold correctly applied)", all_above_threshold)
+
     t.section("Month Ambiguity Logic (multi-year, synthetic test)")
     synthetic_row = combined.iloc[0:1].copy()
     synthetic_row['month'] = 'Apr-27'

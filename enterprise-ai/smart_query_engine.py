@@ -368,6 +368,63 @@ class SmartQueryEngine:
         }
 
     # ------------------------------------------------------------------
+    # ac) Statistical Anomaly Detection -- finds items (brands/companies/
+    #     TSEs/shops) whose month-over-month % change is a STATISTICAL
+    #     OUTLIER relative to the distribution of changes across ALL
+    #     items in scope -- not just "a big change", but a change that's
+    #     unusual COMPARED TO PEERS in the same period. Uses z-score
+    #     (how many standard deviations from the mean is this item).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def detect_anomalies(df_current, df_previous, dimension_col: str = 'brand_name_as_per_company_data',
+                          z_threshold: float = 2.0, min_base_qty: int = 50):
+        current_totals = df_current.groupby(dimension_col)['sale_qty_in_box'].sum()
+        previous_totals = df_previous.groupby(dimension_col)['sale_qty_in_box'].sum()
+
+        all_items = set(current_totals.index) | set(previous_totals.index)
+        records = []
+        for item in all_items:
+            cur = int(current_totals.get(item, 0))
+            prev = int(previous_totals.get(item, 0))
+            # Skip items with a tiny previous-month base -- % swings on
+            # very small volumes are noisy, not genuinely anomalous
+            # (e.g. 1 box -> 3 box = "200% spike" but means nothing).
+            if prev < min_base_qty:
+                continue
+            pct_change = round((cur - prev) / prev * 100, 2)
+            records.append({'item': item, 'current_qty': cur, 'previous_qty': prev, 'pct_change': pct_change})
+
+        if len(records) < 5:
+            return {'found': False,
+                    'message': 'Anomaly detection ke liye kaafi data points nahi hain (kam se kam 5 chahiye).'}
+
+        pct_changes = [r['pct_change'] for r in records]
+        mean_pct = sum(pct_changes) / len(pct_changes)
+        variance = sum((x - mean_pct) ** 2 for x in pct_changes) / len(pct_changes)
+        std_pct = variance ** 0.5
+
+        anomalies = []
+        for r in records:
+            z_score = (r['pct_change'] - mean_pct) / std_pct if std_pct > 0 else 0.0
+            if abs(z_score) >= z_threshold:
+                r['z_score'] = round(z_score, 2)
+                r['anomaly_type'] = 'spike' if z_score > 0 else 'drop'
+                anomalies.append(r)
+
+        anomalies.sort(key=lambda r: -abs(r['z_score']))
+
+        return {
+            'found': True,
+            'dimension': dimension_col,
+            'total_items_analyzed': len(records),
+            'mean_pct_change': round(mean_pct, 2),
+            'std_pct_change': round(std_pct, 2),
+            'z_threshold_used': z_threshold,
+            'anomalies_found': len(anomalies),
+            'anomalies': anomalies,
+        }
+
+    # ------------------------------------------------------------------
     # i) Brand Ranking — rank at BD Segment, Segment, and Overall Market level
     # ------------------------------------------------------------------
     def brand_ranking(self, brand_name: str):

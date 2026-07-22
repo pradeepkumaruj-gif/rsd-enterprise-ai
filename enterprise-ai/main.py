@@ -756,7 +756,26 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     primary_dimension: "department", primary_value: "DCCWS"), "April se May tak Semi Pre
     Whisky ka pivot report" (-> month_filter: {{"start":"Apr-26","end":"May-26"}})
 
-Agar sawaal upar ke kisi specific intent (2-28) se match nahi karta, "generic" use karo.
+29. "anomaly_detection" -- STATISTICAL anomaly/outlier detection -- brands (ya company/tse/
+    department) ka month-over-month % change nikaalta hai, phir un mein se JO PEERS (baaki
+    saare items) ki tulna mein STATISTICALLY UNUSUAL hain (z-score >= threshold), unhe flag
+    karta hai. Yeh "top gainers/losers" (mom_gainers_losers) SE ALAG hai -- woh sirf RANK karta
+    hai (top N), yeh STATISTICALLY "abnormal" cheezein dhoondta hai (mean se kitna door hai,
+    standard deviations mein) -- matlab agar SAARE brands 50% grow ho rahe hain, ek brand jo
+    55% grow hua woh "anomaly" NAHI hai (normal hai is context mein), lekin ek brand jo 900%
+    grow hua woh HAI (statistically bahut alag baaki sabse).
+    params: {{"dimension": "brand", "z_threshold": 2.0, "min_base_qty": 50}}
+    "dimension" ho sakta hai: "brand" (default), "company", "tse", ya "department".
+    "z_threshold" OPTIONAL hai (default 2.0) -- kitne standard deviations door hona chahiye
+    "anomaly" maane jaane ke liye. Agar user "bahut zyada strict" ya "sirf extreme cases"
+    bole, 3.0 use karo. Agar "thoda zyada sensitive" bole, 1.5 use karo.
+    "min_base_qty" OPTIONAL hai (default 50) -- kam volume wale items ko exclude karta hai
+    (taaki chhote numbers ka noisy % change "anomaly" na dikhe).
+    Trigger: "koi anomaly hai kya is mahine", "kaunsa brand achanak spike/drop hua",
+    "statistically unusual changes dikhao", "kaunse brands normal se bahut alag perform kar
+    rahe hain", "abnormal growth/decline kahan hai"
+
+Agar sawaal upar ke kisi specific intent (2-29) se match nahi karta, "generic" use karo.
 
 Available dimensions (generic intent ke liye, sirf yehi use karo): {list(DIMENSIONS.keys())}
 
@@ -1006,6 +1025,16 @@ FIELD_DISPLAY_LABELS = {
     'previous_qty': '📦 Previous Qty',
     'change_qty': '🔄 Change (Qty)',
     'pct_change': '📊 % Change',
+    'total_items_analyzed': '🔢 Total Items Analyzed',
+    'mean_pct_change': '📊 Average % Change (All Items)',
+    'std_pct_change': '📊 Std Deviation (% Change)',
+    'anomalies_found': '🚨 Anomalies Found',
+    'anomalies': '🚨 Anomalies',
+    'item': '🥃 Item',
+    'current_qty': '📦 Current Qty',
+    'previous_qty': '📦 Previous Qty',
+    'z_score': '📊 Z-Score',
+    'anomaly_type': '🚨 Type',
     'current_month_qty': '📦 Current Month Qty',
     'previous_month_qty': '📦 Previous Month Qty',
     'is_new_entry': '🆕 New Entry?',
@@ -1231,6 +1260,8 @@ PCT_SUFFIX_KEYS = {
     'scope_pct_of_overall_market',
     'market_share_pct',
     'pct_of_market',
+    'mean_pct_change',
+    'std_pct_change',
 }
 
 
@@ -2483,6 +2514,30 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                     if bd_seg_filter:
                         rows = [{k: v for k, v in row.items() if k != "bd_segment"} for row in rows]
                     result[json_key] = rows
+
+        elif intent == "anomaly_detection":
+            df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+            if df_current is None:
+                return "Anomaly detection ke liye kam se kam 2 mahino ka data chahiye. Abhi sirf 1 mahina loaded hai."
+
+            dim_col = DIMENSIONS.get(params.get("dimension", "brand"), COL_BRAND)
+            anomaly_result = SmartQueryEngine.detect_anomalies(
+                df_current, df_previous, dimension_col=dim_col,
+                z_threshold=params.get("z_threshold", 2.0),
+                min_base_qty=params.get("min_base_qty", 50),
+            )
+            if not anomaly_result.get("found"):
+                result = anomaly_result
+            else:
+                result = {
+                    "current_month": cur_label,
+                    "previous_month": prev_label,
+                    "total_items_analyzed": anomaly_result["total_items_analyzed"],
+                    "mean_pct_change": anomaly_result["mean_pct_change"],
+                    "std_pct_change": anomaly_result["std_pct_change"],
+                    "anomalies_found": anomaly_result["anomalies_found"],
+                    "anomalies": anomaly_result["anomalies"],
+                }
 
         elif intent == "brand_ranking":
             result = engine.brand_ranking(params["brand_name"])
