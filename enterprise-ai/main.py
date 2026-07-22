@@ -1,20 +1,32 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import anthropic
 import os
 import threading
+import time
+from collections import defaultdict, deque
 import pandas as pd
 from supabase import create_client
 from smart_query_engine import SmartQueryEngine
 
 app = FastAPI()
 
+# Restrict CORS to ONLY the actual RSD frontend -- previously "*" meant ANY
+# website on the internet could call this backend directly (and use up
+# Anthropic API credits, pull sales data, etc.). If you ever add a new
+# frontend URL (e.g. a custom domain, or local dev), add it to this list.
+ALLOWED_FRONTEND_ORIGINS = [
+    "https://grateful-mercy-production-dd3c.up.railway.app",
+    "http://localhost:5173",   # local Vite dev server
+    "http://localhost:3000",   # common local dev port, just in case
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_FRONTEND_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -123,6 +135,29 @@ class ChatRequest(BaseModel):
                          # questions ("April ki bhi batao") can inherit context
                          # (brand/company/dimension) from the previous question
                          # instead of needing everything repeated every time.
+
+
+# Simple in-memory rate limiter (no external library needed) -- protects
+# against abuse/spam (which burns Anthropic API credits and Supabase
+# bandwidth). Tracks request TIMESTAMPS per client IP in a rolling window.
+# NOTE: this resets on server restart and doesn't share state across
+# multiple server instances -- fine for a single-instance deployment
+# (Railway shows "1 Replica"), but would need a shared store (e.g. Redis)
+# if ever scaled to multiple instances.
+RATE_LIMIT_MAX_REQUESTS = 20   # max requests...
+RATE_LIMIT_WINDOW_SECONDS = 60  # ...per this many seconds, per IP
+_rate_limit_tracker = defaultdict(deque)
+
+
+def _is_rate_limited(client_ip: str) -> bool:
+    now = time.time()
+    timestamps = _rate_limit_tracker[client_ip]
+    while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW_SECONDS:
+        timestamps.popleft()
+    if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+        return True
+    timestamps.append(now)
+    return False
 
 
 @app.get("/")
@@ -864,6 +899,20 @@ Rules:
   Yeh EXACT SAME MECHANISM hai jo simple follow-up ("April ki bhi batao") ke liye use hota hai --
   bas is case mein negation-language ("nahi X nahi") clearly signal karti hai ki KAUNSI purani
   value replace karni hai.
+  ⚠️ "EXPLAIN THIS NUMBER" PATTERN -- agar naya message "yeh kaise calculate hua", "breakdown do",
+  "explain karo", "kaise aaya yeh number", "isko todke dikhao" jaisa ho (matlab user pichle
+  message mein diye gaye NUMBER ka BREAKDOWN/JUSTIFICATION maang raha hai, koi naya entity nahi
+  de raha), TOH: (1) pichle sawaal ke SAARE entities (brand/company/TSE/etc.) as-it-is INHERIT
+  karo, (2) intent ko "generic" set karo, group_by mein ek ADDITIONAL dimension add karo taaki
+  breakdown dikhe jo total ko justify kare -- agar pichle sawaal mein KOI month_filter NAHI tha
+  (matlab total SAARE loaded months ka combined tha), group_by mein "month" add karo (taaki
+  month-wise breakdown dikhe jiska sum = original total). Agar pichle sawaal mein PEHLE SE hi
+  ek specific month tha, group_by mein "department" add karo (taaki us specific month ke andar
+  department-wise breakdown dikhe). Example: pichla sawaal "Dennis ki total sale kya hai" tha
+  (koi month_filter nahi, matlab combined total), jawab "51617" tha, naya message "yeh kaise
+  calculate hua" hai -- iska matlab hai filters: {{"brand": "Dennis"}}, group_by: ["month"],
+  metric: "sum" (jisse "Apr-26: 31536, May-26: 20081" jaisa breakdown milega, jiska sum 51617
+  ban jayega -- yehi "explanation" hai).
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
 - ⚠️ CRITICAL -- BARE DIMENSION NAMES (jaise "brand", "tse", "month", "company") YA UNKE NATURAL
   VARIATIONS (jaise "which brand", "kaunsa brand", "brand kaun sa") KABHI FILTER VALUE NAHI HOTE,
@@ -2580,7 +2629,12 @@ def _solve_single_query(question: str, history: list = None) -> str:
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, http_req: Request):
+    client_ip = http_req.client.host if http_req.client else "unknown"
+    if _is_rate_limited(client_ip):
+        return {"reply": ("⏳ Thoda dheere-dheere! Bahut zyada requests aa rahi hain kam samay mein -- "
+                           f"{RATE_LIMIT_WINDOW_SECONDS} second wait karke phir try karo.")}
+
     if data_loading_status == "loading":
         return {"reply": "⏳ Data abhi Supabase se load ho raha hai, thodi der mein try karo (1-2 minute)."}
     if data_loading_status == "failed" or df.empty:

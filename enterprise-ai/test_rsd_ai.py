@@ -402,12 +402,15 @@ def run_config_validation(t):
     else:
         t.check_true("DOWNLOAD_DISPLAY_LIMIT setting found", False)
 
-    # 4. CORS -- flag (don't fail) if still wide open, since this is a
-    #    known, deliberately-deferred security item, not a regression.
+    # 4. CORS -- should now be RESTRICTED (fixed this session), not wide
+    #    open "*". This is a regression guard: if it ever reverts back to
+    #    "*", that's a real security regression, not an acceptable state.
     cors_wide_open = bool(re.search(r'allow_origins\s*=\s*\[\s*["\']?\*["\']?\s*\]', source))
-    if cors_wide_open:
-        print("  ⚠️  NOTE: CORS allow_origins is still '*' (known open item, not a new bug -- see roadmap)")
-    t.check_true("CORS setting present in source (informational -- see note above if wide open)", 'allow_origins' in source)
+    t.check(f"CORS is NOT wide-open '*' (should be restricted to specific frontend origins)",
+            cors_wide_open, False)
+    t.check_true("ALLOWED_FRONTEND_ORIGINS list present (CORS restriction mechanism)",
+                 'ALLOWED_FRONTEND_ORIGINS' in source)
+    t.check_true("Rate limiting mechanism present (_is_rate_limited)", '_is_rate_limited' in source)
 
     # 5. The retry logic (added this session for transient LLM/network
     #    failures) should still be present.
