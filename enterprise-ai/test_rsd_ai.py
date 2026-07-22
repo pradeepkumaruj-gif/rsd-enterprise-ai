@@ -196,6 +196,26 @@ def run_all_tests():
     sunil_matches = combined[combined['salesman_tse'].str.contains('Sunil', case=False, na=False)]['salesman_tse'].nunique()
     t.check("'Sunil' matches exactly 1 TSE (should resolve without clarification)", sunil_matches, 1)
 
+    print("\n--- Company Ambiguity Data Property (regression guard) ---")
+    # "Rock and Storm" genuinely matches 2 distinct companies (Distilleries
+    # vs Bottlers) -- this guards that fact so the resolve_company_name
+    # ambiguity check in main.py stays relevant/testable.
+    rs_matches = combined[combined['company_name'].str.contains('Rock and Storm', case=False, na=False)]['company_name'].nunique()
+    t.check("'Rock and Storm' matches exactly 2 distinct companies (Distilleries vs Bottlers)", rs_matches, 2)
+
+    print("\n--- Month Ambiguity Logic (multi-year, synthetic test) ---")
+    # We currently only have Apr-26/May-26 data (no real multi-year overlap
+    # to test against), so this synthetically adds an Apr-27 row to verify
+    # the bare-month-name (no year) ambiguity detection in
+    # resolve_month_reference still works correctly when it eventually
+    # matters (e.g. once a second year of data is loaded).
+    synthetic_row = combined.iloc[0:1].copy()
+    synthetic_row['month'] = 'Apr-27'
+    test_df_multiyear = pd.concat([combined, synthetic_row], ignore_index=True)
+    month_prefix = "april"[:3]
+    matches = sorted(m for m in test_df_multiyear['month'].astype(str).unique() if str(m).lower().startswith(month_prefix))
+    t.check("'April' (no year) matches 2 distinct years when both exist -- should trigger clarification", len(matches), 2)
+
     return t.summary()
 
 

@@ -325,8 +325,14 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     dhoondh ke uska poora company-wide total nikalega. Agar user seedha company ka naam de,
     "company_name" param use karo.
     params: {{"company_name": null, "brand_name": null, "top_brands": 10}}
+    ⚠️ DEFAULT BEHAVIOR -- agar user SIRF "[Company Name] ki sale" jaisa bole (bina yeh bataye ki
+    total chahiye, brand-wise chahiye, ya kisi dimension-wise breakdown chahiye), CLARIFICATION
+    MAT MAANGO -- seedha "company_report" use karo (company ka POORA overview -- total sale,
+    market share, brands, top department, waghera -- ek saath milta hai isse, jo generic "ki
+    sale" ka sabse sensible default hai).
     Trigger: "Dennis brand ki company ki total sale kya hai", "OMSONS company ka total business
-    kitna hai", "[brand] banane wali company ka overall sale"
+    kitna hai", "[brand] banane wali company ka overall sale", "Rock and Storm ki sale batao"
+    (-> seedha company_report, company_name: "Rock and Storm" -- clarification NAHI maango)
 
 14. "compare_companies" -- 2 se 10 companies (manufacturers) side-by-side compare karo
     (market share, rank, brands count, top brand, shops, MoM growth, etc.).
@@ -718,6 +724,14 @@ pehchano aur sahi dimension pe map karo:
   pattern), TURANT "compare_dimension_values" (dimension: "tse") use karo -- CLARIFICATION MAT
   MAANGO, guess mat maano "yeh TSE hai ya kuch aur" -- is dataset mein person-names ka MATLAB
   hi TSE hai, koi ambiguity nahi hai yahan.
+  ⚠️ YEH SIRF FULL NAMES KE LIYE NAHI HAI -- BARE SURNAMES bhi (jaise sirf "Sharma", "Kumar",
+  "Singh", "Kapoor" akela bola jaye) TURANT "tse" dimension maano, CLARIFICATION MAT MAANGO ki
+  "yeh TSE hai ya brand/company/shop". Code-level (Python) apne aap check karega ki yeh surname
+  KITNE TSEs se match karta hai -- agar 1 se zyada match ho (jaise "Sharma" 2 TSEs se match
+  karta hai: Sunil Sharma, Ram Gopal Sharma), Python khud specific clarification dega (exact
+  konse options hain, list ke saath) -- TUMHE (parser ko) bas dimension="tse" set karke aage
+  badhna hai, apni taraf se "kya yeh TSE hai" wala doubt nahi uthana. Yehi rule "Kumar" aur
+  "Singh" ke liye bhi hai.
 - "department" ke liye: "vibhaag", "nigam" (yeh values khud corporations hain: DSIIDC, DTTDC,
   DCCWS, DSCSC, HCR), "corporation", "agency", "board", "govt corporation", "psu"
 - "shop_code" ke liye: "shop id", "shop number", "outlet code", "outlet id", "retailer code",
@@ -1422,6 +1436,13 @@ def run_query(spec: dict, working_df=None):
                 resolved_value = resolve_tse_name(str(value))
                 filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
                 continue
+            if dim == "company":
+                # Same ambiguity risk -- e.g. "Rock and Storm" matches 2
+                # distinct companies (Rock and Storm DISTILLERIES vs Rock
+                # and Storm BOTTLERS).
+                resolved_value = resolve_company_name(str(value))
+                filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
+                continue
             resolved_value = fuzzy_resolve_value(str(value), col)
             filtered = filtered[filtered[col].astype(str).str.contains(str(resolved_value), case=False, na=False)]
 
@@ -1796,7 +1817,7 @@ def resolve_segment_reference(value: str) -> str:
 
 
 def resolve_company_name(partial_name: str) -> str:
-    return fuzzy_resolve_value(partial_name, COL_COMPANY)
+    return _resolve_with_ambiguity_check(partial_name, COL_COMPANY, "company")
 
 
 def run_special_intent(intent: str, params: dict, working_df=None):
