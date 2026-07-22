@@ -348,7 +348,10 @@ export default function App() {
       const response = await fetch("https://rsd-enterprise-ai-production.up.railway.app/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msgText }),
+        body: JSON.stringify({ 
+     message: msgText,
+     history: messages.slice(-6).map(m => ({ role: m.role, content: m.content }))
+   }),
         signal: controller.signal
       })
       clearTimeout(timeout)
