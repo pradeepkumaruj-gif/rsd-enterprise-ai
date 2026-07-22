@@ -732,6 +732,12 @@ pehchano aur sahi dimension pe map karo:
   konse options hain, list ke saath) -- TUMHE (parser ko) bas dimension="tse" set karke aage
   badhna hai, apni taraf se "kya yeh TSE hai" wala doubt nahi uthana. Yehi rule "Kumar" aur
   "Singh" ke liye bhi hai.
+  📌 CONCRETE EXAMPLE (isi tarah handle karo, hooba-hoo) -- Query: "Sharma ki sale batao".
+  GALAT response: {{"query_understood": false, "clarification_needed": "Sharma se aapka matlab
+  TSE hai ya brand/company?"}} -- YEH MAT KARO.
+  SAHI response: {{"query_understood": true, "intent": "generic", "params": {{"filters":
+  {{"tse": "Sharma"}}, "group_by": [], "metric": "sum"}}}} -- Python khud "Sharma" 2 TSEs se
+  match hone par clarification dega, tumhe abhi se doubt nahi uthana.
 - "department" ke liye: "vibhaag", "nigam" (yeh values khud corporations hain: DSIIDC, DTTDC,
   DCCWS, DSCSC, HCR), "corporation", "agency", "board", "govt corporation", "psu"
 - "shop_code" ke liye: "shop id", "shop number", "outlet code", "outlet id", "retailer code",
@@ -1386,8 +1392,32 @@ def _autocorrect_filter_group_by_confusion(spec: dict):
     spec["group_by"] = group_by
 
 
+# Business context: TSE assignments in this dataset are tracked per-shop
+# ACROSS ALL companies mixed together (a TSE's territory includes every
+# company's brands sold at their assigned shops) -- but Angel's business
+# is specifically about ROCK AND STORM DISTILLERIES's own performance
+# through these TSEs, not the TSE's entire multi-company territory. So
+# whenever a query touches the "tse" dimension WITHOUT an explicit,
+# different company scope, default to Rock and Storm Distilleries --
+# otherwise numbers silently include competitor brands' sales too (e.g.
+# "Sunil ki sale" without this default included OMSONS's brands, which
+# have nothing to do with Angel's own company).
+DEFAULT_TSE_COMPANY_SCOPE = "Rock and Storm Distilleries"
+
+
+def _apply_default_tse_company_scope(spec: dict):
+    filters = spec.get("filters") or {}
+    group_by = spec.get("group_by") or []
+    touches_tse = "tse" in filters or "tse" in group_by
+    has_explicit_company = "company" in filters
+    if touches_tse and not has_explicit_company:
+        filters["company"] = DEFAULT_TSE_COMPANY_SCOPE
+    spec["filters"] = filters
+
+
 def run_query(spec: dict, working_df=None):
     _autocorrect_filter_group_by_confusion(spec)
+    _apply_default_tse_company_scope(spec)
     filtered = working_df if working_df is not None else df
 
     # Apply filters -- each value is first fuzzy-resolved to the closest
@@ -1957,6 +1987,11 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                 scope_col = DIMENSIONS.get(dim)
                 if scope_col:
                     resolved_scope_filters[scope_col] = _resolve_dim_value(val, scope_col)
+            # Same default as elsewhere: TSE comparisons default to Rock
+            # and Storm Distilleries' own sales unless a different company
+            # scope was explicitly given.
+            if dim_col == COL_TSE and COL_COMPANY not in resolved_scope_filters:
+                resolved_scope_filters[COL_COMPANY] = resolve_company_name(DEFAULT_TSE_COMPANY_SCOPE)
             engine_result = engine.compare_dimension_values(
                 dim_col, resolved_values, scope_filters=resolved_scope_filters or None
             )
@@ -2279,6 +2314,16 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             if not dim_col:
                 return "Valid dimension chahiye (department, shop_code, party, ya tse)."
             resolved_value = fuzzy_resolve_value(str(params.get("value", "")), dim_col)
+
+            # Same default as the generic engine: TSE queries default to
+            # Rock and Storm Distilleries' own sales (not the TSE's whole
+            # multi-company territory) unless a different company is
+            # explicitly given.
+            if dim_col == COL_TSE:
+                explicit_company = params.get("company")
+                scope_company = resolve_company_name(explicit_company) if explicit_company else resolve_company_name(DEFAULT_TSE_COMPANY_SCOPE)
+                df_current = df_current[df_current[COL_COMPANY].str.upper() == scope_company.upper()]
+                df_previous = df_previous[df_previous[COL_COMPANY].str.upper() == scope_company.upper()]
 
             full_result = SmartQueryEngine.dimension_mom_check(dim_col, resolved_value, df_current, df_previous)
             if full_result.get("found"):
