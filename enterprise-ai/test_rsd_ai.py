@@ -14,17 +14,38 @@ neeche update kar do.
 Jab bhi naya feature add karo ya koi function change karo, yeh script
 chala do -- 30 second mein pata chal jayega kuch tuta to nahi.
 
-Is version mein 3 extra cheezein hain:
+Is version mein 8 extra cheezein hain:
 1. DATA SANITY CHECKS -- data-loading issues bhi pakड़ta hai (jaise
    ampersand encoding, missing rows), na ki sirf code bugs.
 2. PERFORMANCE TIMING -- har test kitna time leta hai, track karta hai.
 3. REPORT FILE -- har run ke baad ek timestamped markdown report
    file banata hai (test_report.md) jo business owner ko dikhane layak hai.
+4. CROSS-VALIDATION -- verify karta hai ki ALAG-ALAG functions/code-paths
+   SAME number dete hain jab woh conceptually same cheez calculate kar
+   rahe hon (jaise brand_report ka total, aur raw pandas sum, dono match
+   karne chahiye) -- internal consistency ka guard.
+5. AMBIGUITY CATALOG -- saare brands/companies/TSEs ko systematically
+   scan karta hai, HAR ambiguous naam-overlap proactively dhoondta hai
+   (jaisa "Rock and Storm" 2 companies se match karta hai) -- taaki naye
+   ambiguity bugs discover hone ka wait na karna pade.
+6. CONFIG VALIDATION -- main.py ka SOURCE CODE padhta hai, critical
+   settings (temperature=0, max_tokens, DOWNLOAD_DISPLAY_LIMIT, etc.)
+   check karta hai -- is session ki sabse badi bug (missing temperature=0)
+   jaisi cheez ab TURANT pakड़i jayegi, live testing se pehle hi.
+7. REFERENTIAL INTEGRITY -- confirm karta hai ki har brand SIRF ek company
+   aur EK bd_segment se belong karta hai (na ki data-entry typo ki wajah
+   se 2 alag jagah split ho gaya ho).
+8. RANDOM FUZZ TESTING -- REAL data se random brands/companies/segments
+   uthata hai (na ki sirf humare hand-picked examples), sabko key
+   functions ke through chalata hai, sirf crash-check ke liye.
 """
 
 import sys
 import time
 import datetime
+import re
+import random
+from collections import defaultdict
 import pandas as pd
 
 sys.path.insert(0, '.')
@@ -242,7 +263,266 @@ def run_data_sanity_checks(t, apr, may, combined):
 
 
 # ---------------------------------------------------------------------
-# 4. FUNCTIONAL TEST CASES -- known-good expected values (verified
+# 4. CROSS-VALIDATION -- verifies DIFFERENT code paths that compute the
+#    same underlying number all AGREE with each other. If two functions
+#    that should give the same answer for the same brand/company ever
+#    diverge, that's a real bug even if neither individually "looks"
+#    wrong -- this is the kind of check that catches SILENT drift.
+# ---------------------------------------------------------------------
+def run_cross_validation_checks(t, engine, combined):
+    t.section("Cross-Validation (Internal Consistency)")
+
+    dennis_report = engine.brand_report('DENNIS SPECIAL GOLD WHISKY')
+    dennis_raw = int(combined[combined['brand_name_as_per_company_data'] == 'DENNIS SPECIAL GOLD WHISKY']['sale_qty_in_box'].sum())
+    t.check("brand_report total matches raw pandas sum (Dennis)", dennis_report['brand_sale_qty'], dennis_raw)
+
+    omsons_report = engine.company_full_profile('OMSONS MARKETING PRIVATE LIMITED')
+    omsons_raw = int(combined[combined['company_name'] == 'OMSONS MARKETING PRIVATE LIMITED']['sale_qty_in_box'].sum())
+    t.check("company_full_profile total matches raw pandas sum (OMSONS)", omsons_report['total_sale_qty'], omsons_raw)
+
+    omsons_breakdown = engine.dimension_month_brand_breakdown('company_name', 'OMSONS MARKETING PRIVATE LIMITED')
+    breakdown_sum = sum(row['Total'] for row in omsons_breakdown['brand_month_breakdown'])
+    t.check("dimension_month_brand_breakdown sum-of-brands matches company_full_profile total (OMSONS)",
+            breakdown_sum, omsons_report['total_sale_qty'])
+
+    zp = engine.zero_presence_analysis('brand_name_as_per_company_data', 'ROYAL ACE RARE BLENDED WHISKY', 'shop_code')
+    t.check("zero_presence_analysis: present + absent == total universe",
+            zp['present_count'] + zp['absent_count'], zp['total_universe_count'])
+
+    brands_scope = engine.brands_in_bd_segment('DENNIS SPECIAL GOLD WHISKY', top_n=100, scope_col='company_name')
+    dennis_row = next((b for b in brands_scope['brands'] if b['brand'] == 'DENNIS SPECIAL GOLD WHISKY'), None)
+    t.check_true("Dennis's own qty in brands_in_bd_segment matches brand_report total",
+                 dennis_row is not None and dennis_row['sale_qty'] == dennis_report['brand_sale_qty'])
+
+
+# ---------------------------------------------------------------------
+# 5. AMBIGUITY CATALOG -- proactively scans ALL brands/companies/TSEs for
+#    name-overlaps, instead of waiting to stumble onto them one at a time
+#    (like "Rock and Storm" matching 2 companies, discovered by accident
+#    when a user happened to ask about it). This is INFORMATIONAL (prints
+#    findings) rather than pass/fail, since new overlaps aren't "bugs" by
+#    themselves -- they're a heads-up for what the ambiguity-check code in
+#    main.py needs to keep handling correctly.
+# ---------------------------------------------------------------------
+def run_ambiguity_catalog(t, combined):
+    t.section("Comprehensive Ambiguity Catalog (informational)")
+
+    STOP_WORDS = {'pvt', 'ltd', 'ltd.', 'limited', 'private', 'company', 'co', 'co.',
+                  'and', 'the', 'of', 'india', 'distilleries', 'industries', 'group'}
+
+    def core_words(name):
+        cleaned = re.sub(r'[.,]', '', str(name).upper())
+        return {w.lower() for w in cleaned.split() if w.lower() not in STOP_WORDS and len(w) > 2}
+
+    # Companies -- full word-overlap scan (only ~80 companies, cheap).
+    companies = combined['company_name'].unique()
+    word_to_companies = defaultdict(set)
+    for c in companies:
+        for w in core_words(c):
+            word_to_companies[w].add(c)
+    ambiguous_companies = {w: v for w, v in word_to_companies.items() if len(v) > 1}
+    print(f"  📋 {len(ambiguous_companies)} ambiguous company-name word(s) found:")
+    for w, names in sorted(ambiguous_companies.items()):
+        print(f"     '{w}': {sorted(names)}")
+
+    # TSEs -- full word-overlap scan (only ~11 TSEs, cheap).
+    tses = combined['salesman_tse'].unique()
+    word_to_tses = defaultdict(set)
+    for name in tses:
+        for w in str(name).split():
+            word_to_tses[w.lower()].add(name)
+    ambiguous_tses = {w: v for w, v in word_to_tses.items() if len(v) > 1}
+    print(f"  📋 {len(ambiguous_tses)} ambiguous TSE-name word(s) found:")
+    for w, names in sorted(ambiguous_tses.items()):
+        print(f"     '{w}': {sorted(names)}")
+
+    # Brands -- 376+ brands makes a full word-overlap scan too noisy
+    # (common category words like "WHISKY"/"PREMIUM" appear everywhere
+    # and aren't useful references) -- use the FIRST WORD instead, since
+    # that's what users most naturally reference a brand by (e.g. "Royal").
+    brands = combined['brand_name_as_per_company_data'].unique()
+    first_word_to_brands = defaultdict(set)
+    for b in brands:
+        parts = str(b).split()
+        if parts:
+            first_word_to_brands[parts[0].upper()].add(b)
+    ambiguous_brand_first_words = {w: v for w, v in first_word_to_brands.items() if len(v) > 1}
+    print(f"  📋 {len(ambiguous_brand_first_words)} ambiguous brand FIRST-word(s) found (showing top 15 by match count):")
+    for w, names in sorted(ambiguous_brand_first_words.items(), key=lambda kv: -len(kv[1]))[:15]:
+        print(f"     '{w}': {len(names)} brands")
+
+    t.check_true("Ambiguity catalog completed without crashing", True)
+    t.check_true(f"Found >=1 ambiguous company word (validates the company-ambiguity fix is relevant)", len(ambiguous_companies) >= 1)
+    t.check_true(f"Found >=1 ambiguous TSE word (validates the TSE-ambiguity fix is relevant)", len(ambiguous_tses) >= 1)
+    t.check_true(f"Found >=1 ambiguous brand first-word (validates the brand-ambiguity fix is relevant)", len(ambiguous_brand_first_words) >= 1)
+
+
+# ---------------------------------------------------------------------
+# 6. CONFIG VALIDATION -- reads main.py's SOURCE CODE directly and checks
+#    critical settings that are easy to accidentally revert/misconfigure.
+#    This exists because of a REAL bug this session: the parser's
+#    temperature setting was silently missing (defaulting to 1.0 instead
+#    of 0), causing the SAME query to give DIFFERENT results on different
+#    calls -- a config check like this would have caught it immediately,
+#    instead of needing hours of live debugging to trace back to root cause.
+# ---------------------------------------------------------------------
+MAIN_PY_PATH = "main.py"
+
+
+def run_config_validation(t):
+    t.section("Config Validation (main.py source checks)")
+    try:
+        with open(MAIN_PY_PATH, "r", encoding="utf-8") as f:
+            source = f.read()
+    except FileNotFoundError:
+        t.check_true(f"main.py found at '{MAIN_PY_PATH}' for config validation", False)
+        return
+
+    # 1. Parser call must have temperature=0 (THE bug from this session).
+    parser_call_match = re.search(r'def parse_query_with_claude.*?(?=\ndef )', source, re.DOTALL)
+    parser_call_source = parser_call_match.group(0) if parser_call_match else ""
+    t.check_true("Parser call includes 'temperature=0' (prevents non-deterministic JSON parsing)",
+                 re.search(r'temperature\s*=\s*0\b', parser_call_source) is not None)
+
+    # 2. max_tokens should be generously sized (300 was too small and
+    #    caused JSON to get cut off for complex queries, another real bug).
+    max_tokens_match = re.search(r'max_tokens\s*=\s*(\d+)', parser_call_source)
+    if max_tokens_match:
+        max_tokens_val = int(max_tokens_match.group(1))
+        t.check_true(f"Parser max_tokens is generously sized (>=500, found {max_tokens_val})", max_tokens_val >= 500)
+    else:
+        t.check_true("Parser max_tokens setting found", False)
+
+    # 3. DOWNLOAD_DISPLAY_LIMIT should exist and be a small, sane number
+    #    (screen readability) -- full data still goes through download_table.
+    limit_match = re.search(r'DOWNLOAD_DISPLAY_LIMIT\s*=\s*(\d+)', source)
+    if limit_match:
+        limit_val = int(limit_match.group(1))
+        t.check_true(f"DOWNLOAD_DISPLAY_LIMIT is a sane small number (1-100, found {limit_val})", 1 <= limit_val <= 100)
+    else:
+        t.check_true("DOWNLOAD_DISPLAY_LIMIT setting found", False)
+
+    # 4. CORS -- flag (don't fail) if still wide open, since this is a
+    #    known, deliberately-deferred security item, not a regression.
+    cors_wide_open = bool(re.search(r'allow_origins\s*=\s*\[\s*["\']?\*["\']?\s*\]', source))
+    if cors_wide_open:
+        print("  ⚠️  NOTE: CORS allow_origins is still '*' (known open item, not a new bug -- see roadmap)")
+    t.check_true("CORS setting present in source (informational -- see note above if wide open)", 'allow_origins' in source)
+
+    # 5. The retry logic (added this session for transient LLM/network
+    #    failures) should still be present.
+    t.check_true("Retry loop present in /chat endpoint ('for attempt in range')",
+                 'for attempt in range' in source)
+
+    # 6. Brand/TSE/Company ambiguity protections should still be present.
+    t.check_true("BrandAmbiguityError class present", 'class BrandAmbiguityError' in source)
+    t.check_true("resolve_tse_name function present", 'def resolve_tse_name' in source)
+    t.check_true("Default TSE company scope logic present", 'DEFAULT_TSE_COMPANY_SCOPE' in source)
+
+
+# ---------------------------------------------------------------------
+# 7. REFERENTIAL INTEGRITY -- each brand should belong to exactly ONE
+#    company and ONE bd_segment. If a brand ever appears under 2+
+#    companies (e.g. due to a typo like "OMSONS" vs "OMSONS " with a
+#    trailing space, or a genuine data entry inconsistency), several of
+#    our functions (which assume brand->company is 1:1) could silently
+#    give WRONG or incomplete answers without ever crashing -- this is
+#    exactly the kind of DATA bug that's invisible until you specifically
+#    check for it.
+# ---------------------------------------------------------------------
+def run_referential_integrity_checks(t, combined):
+    t.section("Referential Integrity Checks")
+
+    # Known placeholder shop codes (used for shops with originally-missing
+    # codes) -- these are EXPECTED to map to many different actual shop
+    # names/departments, not a data bug.
+    KNOWN_PLACEHOLDER_SHOP_CODES = {"APRNF", "1MB"}
+
+    # Normalize "&amp;" vs "&" before checking brand->company uniqueness --
+    # otherwise the KNOWN ampersand-encoding bug (already tracked by the
+    # Data Sanity Check above) shows up AGAIN here as a false "referential
+    # integrity" failure, obscuring genuinely NEW mismatches.
+    normalized_company = combined['company_name'].str.replace('&amp;', '&', regex=False)
+    brand_to_companies = normalized_company.groupby(combined['brand_name_as_per_company_data']).nunique()
+    bad_brands = brand_to_companies[brand_to_companies > 1]
+    t.check(f"Every brand belongs to exactly 1 company, after normalizing &/&amp; (found {len(bad_brands)} GENUINE exception(s))",
+            len(bad_brands), 0)
+    if len(bad_brands) > 0:
+        print(f"  ⚠️  Brands genuinely mapping to multiple DIFFERENT companies (not just &/&amp;): {list(bad_brands.index[:5])}")
+
+    brand_to_segments = combined.groupby('brand_name_as_per_company_data')['bd_segment'].nunique()
+    bad_segment_brands = brand_to_segments[brand_to_segments > 1]
+    t.check(f"Every brand belongs to exactly 1 bd_segment (found {len(bad_segment_brands)} exception(s))",
+            len(bad_segment_brands), 0)
+    if len(bad_segment_brands) > 0:
+        print(f"  ⚠️  Brands mapping to multiple segments: {list(bad_segment_brands.index[:5])}")
+
+    non_placeholder = combined[~combined['shop_code'].isin(KNOWN_PLACEHOLDER_SHOP_CODES)]
+    shop_to_names = non_placeholder.groupby('shop_code')['shop_name_as_per_company_data'].nunique()
+    bad_shops = shop_to_names[shop_to_names > 1]
+    t.check(f"Every NON-PLACEHOLDER shop_code maps to exactly 1 shop name (found {len(bad_shops)} exception(s); "
+            f"{KNOWN_PLACEHOLDER_SHOP_CODES} excluded as known catch-all codes)", len(bad_shops), 0)
+    if len(bad_shops) > 0:
+        print(f"  ⚠️  Shop codes with multiple names: {list(bad_shops.index[:5])}")
+
+    shop_to_dept = non_placeholder.groupby('shop_code')['department'].nunique()
+    bad_dept_shops = shop_to_dept[shop_to_dept > 1]
+    t.check(f"Every shop_code belongs to exactly 1 department (found {len(bad_dept_shops)} exception(s))",
+            len(bad_dept_shops), 0)
+
+
+# ---------------------------------------------------------------------
+# 8. RANDOM FUZZ TESTING -- picks a RANDOM sample of REAL brands,
+#    companies, and shops from the actual data (not just our 3-4
+#    hand-picked examples) and runs them through key functions, checking
+#    ONLY that nothing crashes. This catches edge-case crashes hiding in
+#    brands/shops we never happened to manually test (e.g. names with
+#    unusual characters, extremely small sale volumes, etc.).
+# ---------------------------------------------------------------------
+def run_fuzz_testing(t, engine, combined, sample_size=15, seed=42):
+    t.section(f"Random Fuzz Testing ({sample_size} real samples per category)")
+    rng = random.Random(seed)  # fixed seed -- same "random" sample every run, for reproducibility
+
+    all_brands = combined['brand_name_as_per_company_data'].unique().tolist()
+    sample_brands = rng.sample(all_brands, min(sample_size, len(all_brands)))
+    crashes = []
+    for b in sample_brands:
+        try:
+            engine.brand_report(b)
+        except Exception as e:
+            crashes.append(f"brand_report('{b}'): {type(e).__name__}: {e}")
+    t.check(f"brand_report() ran on {len(sample_brands)} random real brands with no crashes", len(crashes), 0)
+    for c in crashes[:5]:
+        print(f"  ⚠️  {c}")
+
+    all_companies = combined['company_name'].unique().tolist()
+    sample_companies = rng.sample(all_companies, min(sample_size, len(all_companies)))
+    crashes = []
+    for c in sample_companies:
+        try:
+            engine.company_full_profile(c)
+        except Exception as e:
+            crashes.append(f"company_full_profile('{c}'): {type(e).__name__}: {e}")
+    t.check(f"company_full_profile() ran on {len(sample_companies)} random real companies with no crashes", len(crashes), 0)
+    for c in crashes[:5]:
+        print(f"  ⚠️  {c}")
+
+    all_segments = combined['bd_segment'].unique().tolist()
+    sample_segments = rng.sample(all_segments, min(sample_size, len(all_segments)))
+    crashes = []
+    for s in sample_segments:
+        try:
+            engine.dimension_month_brand_breakdown('bd_segment', s, top_n_brands=5)
+        except Exception as e:
+            crashes.append(f"dimension_month_brand_breakdown('{s}'): {type(e).__name__}: {e}")
+    t.check(f"dimension_month_brand_breakdown() ran on {len(sample_segments)} random real segments with no crashes",
+            len(crashes), 0)
+    for c in crashes[:5]:
+        print(f"  ⚠️  {c}")
+
+
+# ---------------------------------------------------------------------
+# 9. FUNCTIONAL TEST CASES -- known-good expected values (verified
 #    manually earlier), now timed via check_timed/check_no_crash.
 # ---------------------------------------------------------------------
 def run_all_tests():
@@ -364,6 +644,12 @@ def run_all_tests():
     sunil_rs_only = sunil_all[sunil_all['company_name'] == 'ROCK AND STORM DISTILLERIES PVT.LTD.,']
     sunil_rs_brands = sunil_rs_only['brand_name_as_per_company_data'].nunique()
     t.check("Sunil Sharma's Rock-and-Storm-DISTILLERIES-scoped brand count", sunil_rs_brands, 5)
+
+    run_cross_validation_checks(t, engine, combined)
+    run_ambiguity_catalog(t, combined)
+    run_config_validation(t)
+    run_referential_integrity_checks(t, combined)
+    run_fuzz_testing(t, engine, combined)
 
     success = t.summary()
     t.write_report()
