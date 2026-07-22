@@ -2607,6 +2607,13 @@ def chat(request: ChatRequest):
         insight_response = client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=150,
+            temperature=0,  # grounding matters here too -- this call was seen
+                            # fabricating claims (e.g. "only March data available")
+                            # that had ZERO basis in the actual data, especially on
+                            # follow-up questions where request.message alone (e.g.
+                            # "April ki bhi batao") lacks the full resolved context
+                            # (which brand/company, etc.) -- low temperature reduces
+                            # this kind of unconstrained invention.
             system=(
                 "Tu ek chhota insight-generator hai RSD liquor sales data ke liye. Tumhe neeche "
                 "diya gaya data ek observation ke liye dikhaya ja raha hai -- ISE DOBARA MAT LIKHO, "
@@ -2614,7 +2621,16 @@ def chat(request: ChatRequest):
                 "CHHOTA 1-2 line ka Hinglish insight/comment do jo is data se related ho (jaise "
                 "'yeh brand apne segment ka leader hai' ya 'yeh decline chinta ka vishay hai'). "
                 "Emoji use karo. Agar data mein 'not found' / error ho, kuch mat likho, khaali "
-                "string return karo."
+                "string return karo.\n\n"
+                "⚠️ CRITICAL -- SIRF neeche diye 'Data' section mein jo dikh raha hai, USI ke baare "
+                "mein comment karo. KABHI BHI koi claim mat banao jo Data mein nahi likha hai -- "
+                "jaise 'yeh data available nahi hai', 'sirf [X] tak ka data hai', 'system update "
+                "chahiye', waghera -- YEH SAB TUMHE NAHI PATA, aur agar Data section mein koi number "
+                "successfully dikh raha hai (matlab woh data MAUJOOD hai), to kabhi mat bolo ki woh "
+                "available nahi hai. Sawaal ka text (jaise 'April ki bhi batao') THODA incomplete "
+                "lag sakta hai kyunki yeh ek FOLLOW-UP question hai (pichle context se continue ho "
+                "raha hai) -- is wajah se confused mat ho, sirf Data section ko dekho aur uske "
+                "baare mein neutral, factual insight do."
             ),
             messages=[{
                 "role": "user",
