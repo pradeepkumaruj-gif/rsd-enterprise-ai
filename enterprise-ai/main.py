@@ -836,6 +836,16 @@ Rules:
   gayi hai (jaise "April" yahan month hai), usko naye sawaal se hi lo, purane se mat lo. Agar
   naya sawaal khud mein COMPLETE hai (sab entities clearly bataye gaye hain), purana context
   IGNORE karo -- sirf genuinely INCOMPLETE follow-up questions ke liye inherit karo.
+  ⚠️ CORRECTION PATTERN (bahut zaroori) -- agar naya message "nahi X nahi, Y chahiye tha" ya
+  "galat, Y bolo" ya "X nahi Y" jaisa NEGATION + REPLACEMENT ho (matlab user pichla answer galat
+  bata raha hai aur sahi value de raha hai), TOH: (1) pichle sawaal ke SAARE OTHER entities
+  (brand/company/dimension) as-it-is INHERIT karo, (2) SIRF jo specific value negate ki gayi hai
+  (jaise "May" yahan), usko naye diye gaye value (jaise "April") se REPLACE karo. Example: pichla
+  sawaal "Dennis ki May sale kya hai" tha, naya message "nahi May nahi, April chahiye tha" hai --
+  iska matlab hai "Dennis ki April sale batao" (Dennis inherit hua, May → April replace hua).
+  Yeh EXACT SAME MECHANISM hai jo simple follow-up ("April ki bhi batao") ke liye use hota hai --
+  bas is case mein negation-language ("nahi X nahi") clearly signal karti hai ki KAUNSI purani
+  value replace karni hai.
 - group_by mein 1-3 dimensions daalo jo user pucha hai (jaise "TSE department wise" -> ["tse", "department"])
 - ⚠️ CRITICAL -- BARE DIMENSION NAMES (jaise "brand", "tse", "month", "company") YA UNKE NATURAL
   VARIATIONS (jaise "which brand", "kaunsa brand", "brand kaun sa") KABHI FILTER VALUE NAHI HOTE,
