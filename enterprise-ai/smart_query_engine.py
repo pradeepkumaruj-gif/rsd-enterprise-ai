@@ -1537,9 +1537,13 @@ class SmartQueryEngine:
     @staticmethod
     def brand_growth_breakdown(brand_name: str, df_current, df_previous,
                                 breakdown_by: str = 'department', top_n: int = 10,
-                                extra_filters: dict = None):
-        cur = df_current[df_current['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
-        prev = df_previous[df_previous['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
+                                extra_filters: dict = None, dimension_col: str = 'brand_name_as_per_company_data'):
+        """NOTE: 'brand_name' param name kept for backward compatibility --
+        despite the name, this now works for ANY dimension (pass
+        dimension_col='company_name'/'salesman_tse'/'department' to use it
+        for company/TSE/department growth-breakdown instead of brand)."""
+        cur = df_current[df_current[dimension_col].astype(str).str.upper() == str(brand_name).upper()]
+        prev = df_previous[df_previous[dimension_col].astype(str).str.upper() == str(brand_name).upper()]
 
         # Optional additional scoping filter -- e.g. {"department": "DSIIDC"}
         # to see the shop-wise breakdown WITHIN just that department, rather
@@ -1550,7 +1554,7 @@ class SmartQueryEngine:
                 prev = prev[prev[col].astype(str).str.upper() == str(val).upper()]
 
         if cur.empty and prev.empty:
-            return {'found': False, 'message': f'Brand "{brand_name}" not found in either month (with given filters).'}
+            return {'found': False, 'message': f'"{brand_name}" not found in either month (with given filters).'}
 
         cur_group = cur.groupby(breakdown_by)['sale_qty_in_box'].sum()
         prev_group = prev.groupby(breakdown_by)['sale_qty_in_box'].sum()

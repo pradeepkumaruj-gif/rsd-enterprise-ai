@@ -637,6 +637,18 @@ def run_all_tests():
     all_above_threshold = all(abs(a['z_score']) >= 2.0 for a in anomaly_result['anomalies'])
     t.check_true("All flagged anomalies have |z_score| >= 2.0 (threshold correctly applied)", all_above_threshold)
 
+    # Auto-explanation: for the top anomaly, brand_growth_breakdown should
+    # successfully find WHICH department contributed most to the change --
+    # confirms the generalized (dimension_col-aware) version still works.
+    top_anomaly_item = anomaly_result['anomalies'][0]['item']
+    explanation = SmartQueryEngine.brand_growth_breakdown(
+        top_anomaly_item, may, apr, breakdown_by="department", top_n=1,
+        dimension_col='brand_name_as_per_company_data'
+    )
+    t.check_true("Auto-explanation (growth breakdown) works for top anomaly", explanation.get('found'))
+    t.check_true("Auto-explanation returns at least 1 contributing department",
+                 len(explanation.get('breakdown', [])) >= 1)
+
     t.section("Month Ambiguity Logic (multi-year, synthetic test)")
     synthetic_row = combined.iloc[0:1].copy()
     synthetic_row['month'] = 'Apr-27'

@@ -764,7 +764,7 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     standard deviations mein) -- matlab agar SAARE brands 50% grow ho rahe hain, ek brand jo
     55% grow hua woh "anomaly" NAHI hai (normal hai is context mein), lekin ek brand jo 900%
     grow hua woh HAI (statistically bahut alag baaki sabse).
-    params: {{"dimension": "brand", "z_threshold": 2.0, "min_base_qty": 50, "anomaly_type_filter": null}}
+    params: {{"dimension": "brand", "z_threshold": 2.0, "min_base_qty": 50, "anomaly_type_filter": null, "explain_top_n": 3}}
     "dimension" ho sakta hai: "brand" (default), "company", "tse", ya "department".
     "z_threshold" OPTIONAL hai (default 2.0) -- kitne standard deviations door hona chahiye
     "anomaly" maane jaane ke liye. Agar user "bahut zyada strict" ya "sirf extreme cases"
@@ -776,10 +776,16 @@ saath" (-> intent: 26, month_filter: {{"start":"May-26","end":"May-26"}})
     usi type tak filter ho jayega (agar us type ki koi anomaly na mile, ek clear "koi X anomaly
     nahi mili" message aayega, na ki doosre type ki anomalies confusingly dikhengi). Agar user
     "koi bhi anomaly" ya "spike aur drop dono" poochein, yeh null hi rakho (dono types aayenge).
+    "explain_top_n" OPTIONAL hai (default 3 -- yeh EXAMPLE/DEFAULT hai, agar user koi SPECIFIC
+    number bole to HAMESHA wahi use karo, "3" ko kabhi bhi user ke actual number ke upar priority
+    mat do). Yeh control karta hai ki kitni anomalies ke liye AUTOMATICALLY "kaunse department
+    se yeh change aayi" wala explanation chahiye (top_contributing_department field). Agar user
+    "sabke liye explanation do" ya koi specific number (jaise "top 5 ke liye batao kaha se
+    aaya") bole, wahi number daalo -- max 15 tak allowed hai.
     Trigger: "koi anomaly hai kya is mahine" (-> anomaly_type_filter: null), "kaunsa brand
     achanak spike hua" (-> anomaly_type_filter: "spike"), "kaunse brands achanak DROP hue"
     (-> anomaly_type_filter: "drop"), "statistically unusual changes dikhao", "abnormal
-    growth/decline kahan hai"
+    growth/decline kahan hai", "top 5 anomalies ke liye batao kaha se aaya" (-> explain_top_n: 5)
 
 Agar sawaal upar ke kisi specific intent (2-29) se match nahi karta, "generic" use karo.
 
@@ -1042,6 +1048,8 @@ FIELD_DISPLAY_LABELS = {
     'previous_qty': '📦 Previous Qty',
     'z_score': '📊 Z-Score',
     'anomaly_type': '🚨 Type',
+    'top_contributing_department': '🏛️ Top Contributing Department',
+    'top_contributor_change_qty': '🔄 Change From That Department',
     'current_month_qty': '📦 Current Month Qty',
     'previous_month_qty': '📦 Previous Month Qty',
     'is_new_entry': '🆕 New Entry?',
@@ -2555,6 +2563,25 @@ def run_special_intent(intent: str, params: dict, working_df=None):
                     "anomalies_found": len(anomalies),
                 }
                 if anomalies:
+                    # Auto-explain the top N anomalies (by |z-score|) --
+                    # for each, find WHICH department contributed most to
+                    # the change, using the (now-generalized) growth-
+                    # breakdown function. N is user-configurable (default
+                    # 3), capped at 15 to keep computation/response size
+                    # reasonable even if someone asks for "all of them".
+                    explain_top_n = min(params.get("explain_top_n", 3), 15)
+                    for a in anomalies[:explain_top_n]:
+                        try:
+                            breakdown = SmartQueryEngine.brand_growth_breakdown(
+                                a["item"], df_current, df_previous,
+                                breakdown_by="department", top_n=1, dimension_col=dim_col,
+                            )
+                            if breakdown.get("found") and breakdown["breakdown"]:
+                                top_dept = breakdown["breakdown"][0]
+                                a["top_contributing_department"] = top_dept["department"]
+                                a["top_contributor_change_qty"] = top_dept["change_qty"]
+                        except Exception:
+                            pass  # explanation is a bonus -- never let it break the main anomaly result
                     result["anomalies"] = anomalies
                 elif type_filter:
                     result["note"] = f"Koi '{type_filter}' type ki anomaly nahi mili is period mein."
