@@ -5,6 +5,8 @@ import anthropic
 import os
 import threading
 import time
+import smtplib
+from email.mime.text import MIMEText
 from collections import defaultdict, deque
 import pandas as pd
 from supabase import create_client
@@ -2697,6 +2699,156 @@ def format_period_label(month_filter: dict) -> str:
     return f"{start_str} - {end_str}"
 
 
+# ---------------------------------------------------------------------
+# PROACTIVE ALERT SYSTEM -- daily anomaly check, delivered via email.
+#
+# SETUP REQUIRED (Railway environment variables):
+#   EMAIL_SENDER        -- the Gmail address alerts are sent FROM
+#   EMAIL_APP_PASSWORD  -- a Gmail "App Password" (NOT your normal Gmail
+#                          password) -- generate one at
+#                          https://myaccount.google.com/apppasswords
+#   EMAIL_RECIPIENT     -- the email address alerts are sent TO (can be
+#                          the same as EMAIL_SENDER, or a different inbox)
+#
+# TRIGGERING THIS DAILY: Railway doesn't run arbitrary code on a schedule
+# by itself. Use a free external cron service (e.g. cron-job.org) to call
+# this endpoint's URL once a day (e.g. 8 AM):
+#     https://rsd-enterprise-ai-production.up.railway.app/daily-alert
+# ---------------------------------------------------------------------
+def send_alert_email(subject: str, body_text: str) -> bool:
+    sender = os.getenv("EMAIL_SENDER")
+    password = os.getenv("EMAIL_APP_PASSWORD")
+    recipient = os.getenv("EMAIL_RECIPIENT")
+    if not sender or not password or not recipient:
+        print("Email alert skipped: EMAIL_SENDER/EMAIL_APP_PASSWORD/EMAIL_RECIPIENT not all set.")
+        return False
+
+    msg = MIMEText(body_text, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = recipient
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender, password)
+            server.sendmail(sender, [recipient], msg.as_string())
+        return True
+    except Exception as e:
+        print(f"Email alert failed to send: {e}")
+        return False
+
+
+def generate_daily_anomaly_summary() -> str:
+    """Runs anomaly detection (brand-level) and formats a plain-text
+    summary suitable for an email body. Reuses the SAME detect_anomalies
+    logic as the live chat feature -- no separate/duplicate logic to
+    maintain."""
+    df_current, df_previous, cur_label, prev_label = get_current_and_previous_month_df()
+    if df_current is None:
+        return "Abhi sirf 1 mahina ka data loaded hai -- anomaly detection ke liye 2+ mahine chahiye."
+
+    anomaly_result = SmartQueryEngine.detect_anomalies(
+        df_current, df_previous, dimension_col='brand_name_as_per_company_data'
+    )
+    if not anomaly_result.get("found"):
+        return f"Aaj ({cur_label} vs {prev_label}) koi anomaly detection possible nahi thi: {anomaly_result.get('message', '')}"
+
+    anomalies = anomaly_result["anomalies"]
+    if not anomalies:
+        return f"RSD Enterprise AI Daily Check ({cur_label} vs {prev_label})\n\nAaj koi statistically unusual change nahi mila -- sab kuch normal range mein hai. ✅"
+
+    lines = [
+        f"RSD Enterprise AI Daily Anomaly Check",
+        f"Period: {cur_label} vs {prev_label}",
+        f"Total brands analyzed: {anomaly_result['total_items_analyzed']}",
+        f"Anomalies flagged: {len(anomalies)}",
+        "",
+    ]
+    for a in anomalies[:10]:  # cap email length
+        direction = "📈 SPIKE" if a["anomaly_type"] == "spike" else "📉 DROP"
+        lines.append(f"{direction}: {a['item']}")
+        lines.append(f"   {a['previous_qty']} -> {a['current_qty']} boxes ({a['pct_change']}% change, z-score {a['z_score']})")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@app.get("/daily-alert")
+def daily_alert():
+    """Called once a day by an EXTERNAL cron service (see setup notes
+    above) -- generates the anomaly summary and emails it. Also returns
+    the summary in the response, so you can test this endpoint directly
+    in a browser without waiting for the actual email."""
+    if data_loading_status != "ready" or df.empty:
+        return {"status": "skipped", "reason": "Data not ready yet."}
+
+    summary = generate_daily_anomaly_summary()
+    email_sent = send_alert_email("RSD Enterprise AI -- Daily Anomaly Check", summary)
+    return {"status": "ok", "email_sent": email_sent, "summary": summary}
+
+
+# ---------------------------------------------------------------------
+# VISUAL CHARTS -- detects month-wise trend data in a result (e.g. from
+# dimension_month_brand_breakdown's "Apr-26 Sale"/"May-26 Sale" style
+# columns) and converts it into a Chart.js-ready JSON structure, sent to
+# the frontend as a SEPARATE "chart_data" field (alongside the normal text
+# reply) -- the frontend renders this as an actual line/bar chart. If no
+# month-wise pattern is found, chart_data is simply omitted (text-only
+# reply, exactly as before -- this is purely additive, never required).
+# ---------------------------------------------------------------------
+def extract_chart_data(data):
+    """Scans a result (list of dicts, or a dict containing a list of
+    dicts) for month-wise columns (matching 'Xxx-YY Sale' or similar) and
+    builds {type, labels, datasets} for Chart.js. Returns None if no such
+    pattern is found."""
+    rows = None
+    label_key = None
+    if isinstance(data, list) and data:
+        rows = data
+    elif isinstance(data, dict):
+        for value in data.values():
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                rows = value
+                break
+    if not rows:
+        return None
+
+    sample = rows[0]
+    month_cols = [k for k in sample.keys() if re.match(r'^[A-Za-z]{3}-\d{2} Sale$', str(k))]
+    if not month_cols:
+        return None
+
+    # Find the column that identifies EACH row (brand/company/etc.) --
+    # the first string-valued column that isn't a month column or a
+    # numeric summary field.
+    for k, v in sample.items():
+        if k not in month_cols and k not in ('Total', 'brand_pct_of_total') and isinstance(v, str):
+            label_key = k
+            break
+    if not label_key:
+        return None
+
+    # Sort month columns chronologically (not alphabetically).
+    def month_sort_key(col):
+        month_str = col.replace(' Sale', '')
+        try:
+            return pd.to_datetime(month_str, format='%b-%y')
+        except Exception:
+            return pd.Timestamp.min
+    month_cols_sorted = sorted(month_cols, key=month_sort_key)
+    labels = [c.replace(' Sale', '') for c in month_cols_sorted]
+
+    datasets = []
+    for row in rows[:8]:  # cap to 8 lines/bars so the chart stays readable
+        datasets.append({
+            "label": str(row.get(label_key, "")),
+            "data": [row.get(c, 0) for c in month_cols_sorted],
+        })
+
+    return {"type": "line", "labels": labels, "datasets": datasets}
+
+
 def _solve_single_query(question: str, history: list = None) -> str:
     """Parses and solves ONE independent question end-to-end, returning
     ready-to-display text -- used for each part of a multi-step/multi-part
@@ -2813,6 +2965,12 @@ def chat(request: ChatRequest, http_req: Request):
     else:
         download_table = extract_download_table(data)
 
+    # If the result has month-wise trend data (e.g. from
+    # dimension_month_brand_breakdown), also extract chart-ready JSON --
+    # purely additive, frontend renders it as a chart if present, ignores
+    # it (falls back to text-only) if not.
+    chart_data = extract_chart_data(data)
+
     # CRITICAL: the table/numbers are built here, in pure Python, from the
     # actual data -- never by asking an LLM to "re-type" or "format" them.
     # An LLM transcribing a table can occasionally alter a digit, which is
@@ -2876,4 +3034,6 @@ def chat(request: ChatRequest, http_req: Request):
     response = {"reply": final_reply}
     if download_table:
         response["download_table"] = download_table
+    if chart_data:
+        response["chart_data"] = chart_data
     return response

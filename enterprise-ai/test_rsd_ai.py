@@ -421,6 +421,8 @@ def run_config_validation(t):
     t.check_true("BrandAmbiguityError class present", 'class BrandAmbiguityError' in source)
     t.check_true("resolve_tse_name function present", 'def resolve_tse_name' in source)
     t.check_true("Default TSE company scope logic present", 'DEFAULT_TSE_COMPANY_SCOPE' in source)
+    t.check_true("Proactive alert system present (/daily-alert endpoint)", '/daily-alert' in source)
+    t.check_true("Email sending function present (send_alert_email)", 'def send_alert_email' in source)
 
 
 # ---------------------------------------------------------------------
