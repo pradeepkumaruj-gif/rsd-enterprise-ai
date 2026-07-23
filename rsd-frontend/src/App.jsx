@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react"
+import Chart from 'chart.js/auto'
 import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X, Download, FileSpreadsheet, FileText, FileDown } from "lucide-react"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
@@ -6,6 +7,48 @@ import jsPDF from "jspdf"
 import "jspdf-autotable"
 
 let chatIdCounter = 1
+
+function TrendChart({ chartData, isDark }) {
+  const canvasRef = useRef(null)
+  const chartRef = useRef(null)
+
+  useEffect(() => {
+    if (!canvasRef.current || !chartData) return
+    if (chartRef.current) chartRef.current.destroy()
+
+    const colors = ['#D97757', '#4A90D9', '#7ED957', '#F5A623', '#9B59B6', '#E74C3C', '#1ABC9C', '#F39C12']
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: chartData.type || 'line',
+      data: {
+        labels: chartData.labels,
+        datasets: chartData.datasets.map((ds, i) => ({
+          ...ds,
+          borderColor: colors[i % colors.length],
+          backgroundColor: colors[i % colors.length] + '33',
+          tension: 0.3,
+        })),
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: isDark ? '#ececec' : '#1a1a1a' } } },
+        scales: {
+          x: { ticks: { color: isDark ? '#ececec' : '#1a1a1a' } },
+          y: { ticks: { color: isDark ? '#ececec' : '#1a1a1a' } },
+        },
+      },
+    })
+
+    return () => { if (chartRef.current) chartRef.current.destroy() }
+  }, [chartData, isDark])
+
+  if (!chartData) return null
+  return (
+    <div style={{ maxWidth: '600px', margin: '12px 0' }}>
+      <canvas ref={canvasRef}></canvas>
+    </div>
+  )
+}
 
 export default function App() {
   const [chats, setChats] = useState([{ id: 1, title: "New conversation", messages: [] }])
@@ -119,8 +162,6 @@ export default function App() {
     const headerCells = parsedRows[0]
     const bodyRows = parsedRows.slice(1)
 
-    // A column is treated as "numeric" (and right-aligned, like a spreadsheet)
-    // if EVERY body cell in it looks like a number/%/currency value.
     const isNumericCell = (v) => {
       const s = (v || '').replace(/\*\*/g, '').trim()
       return s === '' || s === '-' || /^[₹$]?-?[\d,]+\.?\d*%?$/.test(s)
@@ -150,33 +191,22 @@ export default function App() {
     return html + '</tbody></table></div>'
   }
 
-  // ---- Download feature: parse markdown tables out of a message's raw
-  // text into plain {headers, rows} objects (no HTML/markdown), then
-  // export them as CSV, Excel, or PDF.
   const stripMd = (s) => s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').trim()
 
-  // Lightweight, robust check used just to decide whether to SHOW the
-  // Download button -- a real markdown table always has a separator row
-  // like "| --- | --- |", which is a very distinctive, hard-to-miss pattern.
   const hasTable = (text) => !!text && /\|[\s:]*-{2,}[\s:]*\|/.test(text)
 
   const parseMarkdownTables = (text) => {
     try {
       if (!text) return []
-      // Normalize line endings (in case of \r\n) and split.
       const lines = text.replace(/\r\n/g, '\n').split('\n')
       const tables = []
       let block = []
       const flushBlock = () => {
         if (!block.length) return
-        // Drop separator rows like "| --- | --- |".
         const dataLines = block.filter(l => !/^\|[\s:|-]+\|$/.test(l.trim()))
         if (dataLines.length >= 1) {
           const parsedRows = dataLines.map(l => {
             const trimmed = l.trim()
-            // Strip one leading and one trailing '|' if present, then split
-            // on '|' -- more predictable than filtering truthy cells, which
-            // could misalign columns if a cell were ever legitimately blank.
             const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '')
             return inner.split('|').map(stripMd)
           })
@@ -222,7 +252,6 @@ export default function App() {
       ws.addRow(t.headers)
       t.rows.forEach(r => ws.addRow(r))
 
-      // Header row: bold white text on blue fill, centered, wrapped, bordered
       const headerRow = ws.getRow(1)
       headerRow.eachCell(cell => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' }
@@ -237,7 +266,6 @@ export default function App() {
       })
       headerRow.height = 32
 
-      // Data rows: subtle borders + alternating (zebra) fill for readability
       for (let r = 2; r <= ws.rowCount; r++) {
         const row = ws.getRow(r)
         row.eachCell(cell => {
@@ -257,7 +285,6 @@ export default function App() {
         }
       }
 
-      // Auto column width based on longest content in that column (capped)
       t.headers.forEach((h, idx) => {
         let maxLen = String(h || '').length
         t.rows.forEach(row => {
@@ -267,7 +294,7 @@ export default function App() {
         ws.getColumn(idx + 1).width = Math.min(Math.max(maxLen + 2, 12), 42)
       })
 
-      ws.views = [{ state: 'frozen', ySplit: 1 }]  // freeze header row while scrolling
+      ws.views = [{ state: 'frozen', ySplit: 1 }]
     })
 
     const buffer = await wb.xlsx.writeBuffer()
@@ -348,10 +375,10 @@ export default function App() {
       const response = await fetch("https://rsd-enterprise-ai-production.up.railway.app/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-     message: msgText,
-     history: messages.slice(-6).map(m => ({ role: m.role, content: m.content }))
-   }),
+        body: JSON.stringify({
+          message: msgText,
+          history: messages.slice(-6).map(m => ({ role: m.role, content: m.content }))
+        }),
         signal: controller.signal
       })
       clearTimeout(timeout)
@@ -359,9 +386,10 @@ export default function App() {
       setLoading(false)
       const aiId = Date.now()
       const downloadTable = data.download_table || null
+      const chartData = data.chart_data || null
       streamResponse(data.reply, (fullText) => {
         setChats(prev => prev.map(ch =>
-          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: aiId, role: "assistant", content: fullText, downloadTable }] }
+          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: aiId, role: "assistant", content: fullText, downloadTable, chartData }] }
         ))
       })
     } catch (error) {
@@ -385,12 +413,10 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100vh", background: c.bg, color: c.text, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", overflow: "hidden" }}>
 
-      {/* Mobile overlay */}
       {sidebarOpen && window.innerWidth < 768 && (
         <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 40 }} />
       )}
 
-      {/* SIDEBAR */}
       {sidebarOpen && (
         <div style={{
           width: "260px", minWidth: "260px", background: c.sidebar,
@@ -398,7 +424,6 @@ export default function App() {
           height: "100vh", overflow: "hidden",
           position: window.innerWidth < 768 ? "fixed" : "relative", zIndex: 50,
         }}>
-          {/* New chat */}
           <div style={{ padding: "12px" }}>
             <button onClick={newChat} style={{
               width: "100%", padding: "9px 12px", background: "transparent",
@@ -413,7 +438,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Chat list */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 8px" }}>
             <p style={{ fontSize: "11px", color: c.text2, padding: "6px 8px", textTransform: "uppercase", letterSpacing: "0.8px", fontWeight: "600" }}>Recents</p>
             {chats.map(ch => (
@@ -442,7 +466,6 @@ export default function App() {
             ))}
           </div>
 
-          {/* Bottom */}
           <div style={{ padding: "10px 12px", borderTop: `1px solid ${c.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <div style={{
@@ -472,10 +495,8 @@ export default function App() {
         </div>
       )}
 
-      {/* MAIN AREA */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
-        {/* Header */}
         <div style={{ padding: "10px 16px", borderBottom: `1px solid ${c.border}`, display: "flex", alignItems: "center", gap: "12px", background: c.bg, flexShrink: 0 }}>
           <button onClick={() => setSidebarOpen(s => !s)} style={{
             background: "transparent", border: "none", cursor: "pointer",
@@ -489,10 +510,8 @@ export default function App() {
           </span>
         </div>
 
-        {/* Messages */}
         <div style={{ flex: 1, overflowY: "auto" }}>
 
-          {/* Welcome */}
           {messages.length === 0 && !isStreaming && (
             <div style={{ padding: "48px 24px 24px" }}>
               <p style={{ fontSize: "22px", fontWeight: "600", marginBottom: "8px" }}>RSD Enterprise AI</p>
@@ -514,7 +533,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Messages list */}
           <div style={{ padding: "0 24px" }}>
             {messages.map((m, i) => (
               <div key={m.id || i} style={{ marginBottom: "8px" }}>
@@ -537,6 +555,7 @@ export default function App() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: "15px", lineHeight: "1.75", color: c.text, textAlign: "left" }}
                         dangerouslySetInnerHTML={{ __html: formatText(m.content) }} />
+                      {m.chartData && <TrendChart chartData={m.chartData} isDark={isDark} />}
                       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "6px", position: "relative" }}>
                         <button onClick={() => copyText(m.content, m.id)} style={{
                           background: "transparent", border: "none", cursor: "pointer",
@@ -577,9 +596,6 @@ export default function App() {
                                     { label: "PDF", icon: <FileDown size={13} />, fn: exportToPDF },
                                   ].map(opt => (
                                     <button key={opt.label} onClick={() => {
-                                      // Prefer the FULL structured dataset from the backend
-                                      // (covers ALL matching rows) over re-parsing whatever
-                                      // truncated table is visible in the chat text.
                                       const tables = m.downloadTable
                                         ? [{ headers: m.downloadTable.headers, rows: m.downloadTable.rows }]
                                         : parseMarkdownTables(m.content)
@@ -606,7 +622,6 @@ export default function App() {
               </div>
             ))}
 
-            {/* Streaming */}
             {isStreaming && (
               <div style={{ display: "flex", gap: "12px", alignItems: "flex-start", padding: "8px 0" }}>
                 <div style={{
@@ -620,7 +635,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Loading */}
             {loading && (
               <div style={{ display: "flex", gap: "12px", alignItems: "center", padding: "16px 0" }}>
                 <div style={{
@@ -640,7 +654,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Input */}
         <div style={{ padding: "12px 24px 20px", background: c.bg, flexShrink: 0 }}>
           <div style={{
             display: "flex", alignItems: "flex-end", gap: "8px",
@@ -678,7 +691,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Settings Modal */}
       {showSettings && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}
           onClick={() => setShowSettings(false)}>
