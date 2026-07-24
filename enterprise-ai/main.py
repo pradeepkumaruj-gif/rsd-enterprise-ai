@@ -132,6 +132,11 @@ def get_current_and_previous_month_df():
 
 class ChatRequest(BaseModel):
     message: str
+    access_key: str = ""  # required keyword to prevent unauthorized/misuse access --
+                           # checked against ACCESS_KEYWORD env var before processing
+                           # ANY query. Enforced here (backend), not just in the frontend
+                           # UI, since a frontend-only gate can be bypassed by anyone
+                           # calling this API directly (e.g. via curl/Postman).
     history: list = []  # optional: [{"role": "user"|"assistant", "content": "..."}, ...]
                          # last 2-3 exchanges from the frontend, used so follow-up
                          # questions ("April ki bhi batao") can inherit context
@@ -326,9 +331,16 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
    Trigger: "Dennis vs 8PM vs Royal Ace compare karo", "Royal Ace ka in sab brands se comparison
    karo: X, Y, Z, W..." (-> brands: ["Royal Ace", "X", "Y", "Z", "W"], Royal Ace anchor hai)
 
-8. "cross_reference_shops" -- Brand A ke top shops mein Brand B kitna bikta hai (gap analysis).
-   params: {{"primary_brand": "...", "secondary_brand": "...", "top_n": 10}}
-   Trigger: "Dennis ke top shops mein 8PM ka kya sale hai"
+8. "cross_reference_shops" -- Brand A ke top shops mein Brand B (ya 2+ brands) kitna bikta hai (gap
+   analysis). Agar SIRF EK secondary brand hai, "secondary_brand" (string) use karo. Agar 2 YA ZYADA
+   secondary brands hain (jaise "Dennis top shops, aur Royal Ace aur White & Blue ki sale wahi
+   shops per"), "secondary_brands" (LIST) use karo -- dono fields EK saath mat do, jo bhi case ho
+   sirf wahi field bhejo.
+   params: {{"primary_brand": "...", "secondary_brand": "...", "top_n": 10}}  -- single secondary
+   YA params: {{"primary_brand": "...", "secondary_brands": ["...", "..."], "top_n": 10}}  -- multiple
+   Trigger: "Dennis ke top shops mein 8PM ka kya sale hai" (-> secondary_brand: "8PM"), "Dennis top
+   10 shops, aur Royal Ace aur White & Blue ki sale wahi shops per" (-> secondary_brands: ["Royal
+   Ace", "White & Blue"])
 
 9. "mom_gainers_losers" -- Month-over-month gainers/losers/new-entries/dropped-brands, automatically
    latest vs pichla mahina use karta hai (koi month specify karne ki zaroorat nahi).
@@ -458,17 +470,21 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
 
 18. "brand_weak_shops_analysis" -- ek brand ke BOTTOM/WEAKEST shops YA TOP/STRONGEST shops
     dhoondo (jaha sabse kam YA sabse zyada bikta hai), phir unhi shops mein dekho konse brands
-    zyada chal rahe hain (ya ek SPECIFIC competitor brand ka wahan performance).
-    params: {{"brand_name": "...", "bottom_n_shops": 10, "compare_brand": null,
+    zyada chal rahe hain (ya ek/2+ SPECIFIC competitor brands ka wahan performance).
+    params: {{"brand_name": "...", "bottom_n_shops": 10, "compare_brand": null, "compare_brands": null,
     "top_n_other_brands": 5, "find_bottom": true, "restrict_to_own_segment": false}}
     - "find_bottom": true -- jab user "lowest/weakest/kam bikne wale" shops pooche (default).
     - "find_bottom": false -- jab user "top/best/highest/sabse zyada bikne wale/top 10 mein
       aati hai" shops pooche -- "kis shop mein iski sale TOP 10 mein aati hai" bhi isi ka matlab
       hai (us BRAND ki apni sabse zyada bikne wali 10 shops -- na ki us shop ke top-10 brands
       mein se ek).
-    - "compare_brand" OPTIONAL hai -- agar user ek specific doosra brand naam de ("Dennis ke
+    - "compare_brand" OPTIONAL hai -- agar user SIRF EK specific doosra brand naam de ("Dennis ke
       weak shops mein Royal Ace ka kya haal hai"), yahan daalo -- sirf uska data un shops mein
-      dikhega. Agar user generic "top brands wahan" pooche, "compare_brand" null rakho --
+      dikhega.
+    - "compare_brands" OPTIONAL hai (LIST) -- agar user 2 YA ZYADA specific brands naam de
+      ("Dennis ke weak shops mein Royal Ace aur White & Blue ka kya haal hai"), yahan list daalo --
+      "compare_brand" aur "compare_brands" EK SAATH mat do, jo bhi case ho sirf wahi field bhejo.
+      Agar user generic "top brands wahan" pooche (koi specific naam nahi), dono null rakho --
       har shop ke top N brands dikhenge.
     - "restrict_to_own_segment": true -- jab user "iske SEGMENT mein top brands" jaisa bole
       (jaise "Dennis ke segment mein top 5 brands"), tab top brands sirf Dennis ke APNE
@@ -481,6 +497,8 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
     mein Royal Ace ki sale kya hai" (-> find_bottom: true, compare_brand: "Royal Ace"), "Dennis
     ki sale konse shop par top 10 mein aati hai aur wahi shop par Royal Ace ki sale kya hai"
     (-> brand_name: "Dennis", find_bottom: false, bottom_n_shops: 10, compare_brand: "Royal Ace"),
+    "Dennis ke weak shops mein Royal Ace aur White & Blue dono ka status" (-> compare_brands:
+    ["Royal Ace", "White & Blue"]),
     "Dennis ki sabse kam sale wali 10 shops batao, waha Dennis ke SEGMENT mein top 5 selling
     brands aur un shop ka market share" (-> brand_name: "Dennis", find_bottom: true,
     bottom_n_shops: 10, top_n_other_brands: 5, restrict_to_own_segment: true)
@@ -591,17 +609,22 @@ lagne ki wajah se KABHI false mat karo, yeh galat use hai is field ka.
 
 23. "segment_top_brands_with_shop_and_compare" -- KISI BHI dimension (BD Segment, Company,
     Department, TSE) ke top N brands, HAR brand ki apni #1 (best-selling) shop, us shop pe us
-    brand ka % share (usi scope ke andar, usi shop mein), PLUS ek SPECIFIC doosra brand ka
+    brand ka % share (usi scope ke andar, usi shop mein), PLUS ek/2+ SPECIFIC doosre brand(s) ka
     status usi shop pe (uski qty + % share bhi usi scope ke andar).
     params: {{"primary_dimension": "bd_segment", "primary_value": "Semi Pre Whisky", "top_n": 20,
-    "compare_brand": "8 PM PREMIUM BLACK BLENDED WHISKY"}}
+    "compare_brand": null, "compare_brands": null}}
     "primary_dimension" ho sakta hai: "bd_segment" (default), "company", "department", ya "tse".
-    "compare_brand" OPTIONAL hai -- agar diya, har row mein us brand ka bhi data aayega usi shop
-    ke liye. Agar nahi diya, sirf top brands + unki shops + % share aayega.
+    "compare_brand" OPTIONAL hai -- agar user SIRF EK specific doosra brand naam de, yahan daalo --
+    har row mein us brand ka bhi data aayega usi shop ke liye.
+    "compare_brands" OPTIONAL hai (LIST) -- agar user 2 YA ZYADA specific brands naam de (jaise
+    "aur Dennis aur Royal Ace ka status wahan"), yahan list daalo -- "compare_brand" aur
+    "compare_brands" EK SAATH mat do, jo bhi case ho sirf wahi field bhejo. Agar user koi specific
+    naam nahi de, dono null rakho -- sirf top brands + unki shops + % share aayega.
     Trigger: "Semi Pre Whisky segment mein top 20 brands, kaunsi shop pe, shop ka market share %,
     aur usi shop pe 8PM ki sale/status kya hai market share % ke saath" (-> primary_dimension:
-    "bd_segment"), "OMSONS company mein top brands, unki top shop, aur Dennis ka wahan status"
-    (-> primary_dimension: "company"), "DCCWS department mein top brands aur shop-wise detail"
+    "bd_segment", compare_brand: "8PM"), "OMSONS company mein top brands, unki top shop, aur
+    Dennis aur Royal Ace ka wahan status" (-> primary_dimension: "company", compare_brands:
+    ["Dennis", "Royal Ace"]), "DCCWS department mein top brands aur shop-wise detail"
     (-> primary_dimension: "department")
 
 24. "brand_transaction_count_analysis" -- kisi brand ki EXACTLY N transactions (orders/rows) wali
@@ -2017,6 +2040,8 @@ def run_special_intent(intent: str, params: dict, working_df=None):
         params["primary_brand"] = resolve_brand_name(params["primary_brand"])
     if "secondary_brand" in params:
         params["secondary_brand"] = resolve_brand_name(params["secondary_brand"])
+    if "secondary_brands" in params and isinstance(params["secondary_brands"], list):
+        params["secondary_brands"] = [resolve_brand_name(b) for b in params["secondary_brands"]]
     if "brands" in params and isinstance(params["brands"], list):
         params["brands"] = [resolve_brand_name(b) for b in params["brands"]]
     if "bd_segment" in params:
@@ -2179,10 +2204,14 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             compare_brand = params.get("compare_brand")
             if compare_brand:
                 compare_brand = resolve_brand_name(compare_brand)
+            compare_brands_list = params.get("compare_brands")
+            if compare_brands_list and isinstance(compare_brands_list, list):
+                compare_brands_list = [resolve_brand_name(b) for b in compare_brands_list]
             engine_result = engine.brand_weak_shops_analysis(
                 params["brand_name"],
                 bottom_n_shops=params.get("bottom_n_shops", 10),
                 compare_brand=compare_brand,
+                compare_brands=compare_brands_list,
                 top_n_other_brands=params.get("top_n_other_brands", 5),
                 find_bottom=params.get("find_bottom", True),
                 restrict_to_own_segment=params.get("restrict_to_own_segment", False),
@@ -2424,10 +2453,14 @@ def run_special_intent(intent: str, params: dict, working_df=None):
             compare_brand = params.get("compare_brand")
             if compare_brand:
                 compare_brand = resolve_brand_name(compare_brand)
+            compare_brands_list = params.get("compare_brands")
+            if compare_brands_list and isinstance(compare_brands_list, list):
+                compare_brands_list = [resolve_brand_name(b) for b in compare_brands_list]
             primary_dim = DIMENSIONS.get(params.get("primary_dimension", "bd_segment"), COL_BD_SEGMENT)
             primary_value = fuzzy_resolve_value(str(params["primary_value"]), primary_dim)
             result = engine.dimension_top_brands_with_shop_and_compare(
-                primary_dim, primary_value, top_n=params.get("top_n", 20), compare_brand=compare_brand,
+                primary_dim, primary_value, top_n=params.get("top_n", 20),
+                compare_brand=compare_brand, compare_brands=compare_brands_list,
             )
 
         elif intent == "brand_growth_breakdown":
@@ -2484,7 +2517,10 @@ def run_special_intent(intent: str, params: dict, working_df=None):
 
         elif intent == "cross_reference_shops":
             result = engine.cross_reference_shops(
-                params["primary_brand"], params["secondary_brand"], top_n=params.get("top_n", 10)
+                params["primary_brand"],
+                secondary_brand=params.get("secondary_brand"),
+                secondary_brands=params.get("secondary_brands"),
+                top_n=params.get("top_n", 10),
             )
 
         elif intent == "mom_gainers_losers":
@@ -2960,6 +2996,16 @@ def chat(request: ChatRequest, http_req: Request):
     if _is_rate_limited(client_ip):
         return {"reply": ("⏳ Thoda dheere-dheere! Bahut zyada requests aa rahi hain kam samay mein -- "
                            f"{RATE_LIMIT_WINDOW_SECONDS} second wait karke phir try karo.")}
+
+    # Access keyword gate -- if ACCESS_KEYWORD is set (Railway env var),
+    # every request must include the matching key. Checked FIRST, before
+    # any data/LLM work, so an unauthorized request costs nothing (no
+    # Anthropic API call, no Supabase query). If ACCESS_KEYWORD isn't set
+    # at all, this check is skipped entirely (backward-compatible -- the
+    # app works exactly as before until you actually configure a keyword).
+    required_key = os.getenv("ACCESS_KEYWORD")
+    if required_key and request.access_key != required_key:
+        return {"reply": "🔒 Access denied. Sahi access keyword ke saath try karo.", "access_denied": True}
 
     if data_loading_status == "loading":
         return {"reply": "⏳ Data abhi Supabase se load ho raha hai, thodi der mein try karo (1-2 minute)."}

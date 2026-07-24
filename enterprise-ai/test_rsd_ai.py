@@ -592,6 +592,59 @@ def run_all_tests():
     r = engine.cross_tab_matrix('department', 'department', top_rows=2, top_cols=2)
     t.check("cross_tab_matrix same-dimension returns found=False (not crash)", r['found'], False)
 
+    t.section("Cross Reference Shops (multi-brand generalization)")
+    r_single = engine.cross_reference_shops('DENNIS SPECIAL GOLD WHISKY', secondary_brand='ROYAL ACE RARE BLENDED WHISKY', top_n=5)
+    t.check_true("Single secondary_brand (backward compat) still works", r_single.get('found'))
+    r_multi = engine.cross_reference_shops(
+        'DENNIS SPECIAL GOLD WHISKY',
+        secondary_brands=['ROYAL ACE RARE BLENDED WHISKY', 'WHITE & BLUE SELECT WHISKY'],
+        top_n=5,
+    )
+    t.check_true("Multiple secondary_brands (2+) works -- regression guard for 'missing secondary_brand' bug", r_multi.get('found'))
+    t.check_true("Multi-brand result has BOTH secondary brand columns in each row",
+                 'ROYAL ACE RARE BLENDED WHISKY Qty' in r_multi['table'][0] and 'WHITE & BLUE SELECT WHISKY Qty' in r_multi['table'][0])
+
+    t.section("Brand Weak Shops Analysis (multi-brand generalization)")
+    r_ws_single = engine.brand_weak_shops_analysis('DENNIS SPECIAL GOLD WHISKY', bottom_n_shops=3, compare_brand='ROYAL ACE RARE BLENDED WHISKY')
+    t.check_true("Single compare_brand (backward compat) still works", r_ws_single.get('found'))
+    r_ws_multi = engine.brand_weak_shops_analysis(
+        'DENNIS SPECIAL GOLD WHISKY', bottom_n_shops=3,
+        compare_brands=['ROYAL ACE RARE BLENDED WHISKY', 'WHITE & BLUE SELECT WHISKY'],
+    )
+    t.check_true("Multiple compare_brands (2+) works -- regression guard for the same 'missing param' bug class", r_ws_multi.get('found'))
+    t.check_true("Multi-brand weak-shops result has both compare-brand columns",
+                 'ROYAL ACE RARE BLENDED WHISKY_qty' in r_ws_multi['rows'][0] and 'WHITE & BLUE SELECT WHISKY_qty' in r_ws_multi['rows'][0])
+
+    t.section("Dimension Top Brands With Shop And Compare (multi-brand generalization)")
+    r_tb_single = engine.dimension_top_brands_with_shop_and_compare('bd_segment', 'Semi Pre Whisky', top_n=3, compare_brand='DENNIS SPECIAL GOLD WHISKY')
+    t.check_true("Single compare_brand (backward compat) still works", r_tb_single.get('found'))
+    t.check_true("Backward-compat flat field 'compare_brand_overall_qty' still present", 'compare_brand_overall_qty' in r_tb_single)
+    r_tb_multi = engine.dimension_top_brands_with_shop_and_compare(
+        'bd_segment', 'Semi Pre Whisky', top_n=3,
+        compare_brands=['DENNIS SPECIAL GOLD WHISKY', 'ROYAL ACE RARE BLENDED WHISKY'],
+    )
+    t.check_true("Multiple compare_brands (2+) works -- regression guard for the same 'missing param' bug class", r_tb_multi.get('found'))
+    t.check_true("Multi-brand result has both compare-brand columns",
+                 'DENNIS SPECIAL GOLD WHISKY_qty_at_shop' in r_tb_multi['top_brands'][0] and
+                 'ROYAL ACE RARE BLENDED WHISKY_qty_at_shop' in r_tb_multi['top_brands'][0])
+
+    t.section("No Artificial Comparison Limits (regression guard)")
+    # These 3 functions USED to hard-error past 10 items ("Maximum 10
+    # brands/companies/values allowed") -- that cap has been removed. This
+    # guards against it silently coming back.
+    brands_12 = combined['brand_name_as_per_company_data'].unique()[:12].tolist()
+    r_b12 = engine.compare_brands(brands_12)
+    t.check_true("compare_brands works with 12 brands (was capped at 10)", r_b12.get('found', True) is not False)
+
+    companies_12 = combined['company_name'].unique()[:12].tolist()
+    r_c12 = engine.compare_companies(companies_12)
+    t.check_true("compare_companies works with 12 companies (was capped at 10)", r_c12.get('found'))
+
+    all_tses = combined['salesman_tse'].unique().tolist()
+    r_v_all = engine.compare_dimension_values('salesman_tse', all_tses)
+    t.check(f"compare_dimension_values works with all {len(all_tses)} TSEs (was capped at 10)",
+            r_v_all.get('values_compared'), len(all_tses))
+
     t.section("Compare Dimension Values (with scope_filters)")
     r = t.check_timed(
         "compare_dimension_values (scoped) runs",

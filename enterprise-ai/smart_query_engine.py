@@ -231,12 +231,11 @@ class SmartQueryEngine:
     # ------------------------------------------------------------------
     # f) Compare multiple brands side-by-side (2 to 10 brands)
     # ------------------------------------------------------------------
-    def compare_brands(self, brands: list, max_brands: int = 10):
+    def compare_brands(self, brands: list, max_brands: int = None):
         if len(brands) < 2:
             return {'found': False, 'message': 'Please provide at least 2 brands to compare.'}
-        if len(brands) > max_brands:
-            return {'found': False,
-                    'message': f'Maximum {max_brands} brands allowed for comparison. You gave {len(brands)}.'}
+        # NOTE: no upper limit -- comparisons work for ANY number of brands
+        # (large comparisons just render as a wider table, they don't fail).
 
         result = {}
         for brand in brands:
@@ -281,35 +280,63 @@ class SmartQueryEngine:
     # ------------------------------------------------------------------
     # g) Cross-reference: Brand A's top shops -> check Brand B's sale there
     # ------------------------------------------------------------------
-    def cross_reference_shops(self, primary_brand: str, secondary_brand: str, top_n: int = 10):
+    def cross_reference_shops(self, primary_brand: str, secondary_brand=None, top_n: int = 10, secondary_brands: list = None):
+        """NOTE: accepts EITHER a single 'secondary_brand' (string, kept for
+        backward compatibility) OR a 'secondary_brands' list (2+ brands) --
+        e.g. 'Dennis top 10 shops, aur Royal Ace aur White & Blue ki sale
+        wahi shops per' needs 2 secondary brands, not just 1."""
         df = self.df
         primary_sub = df[df['brand_name_as_per_company_data'].str.upper() == primary_brand.upper()]
         if primary_sub.empty:
             return {'found': False, 'message': f'Brand "{primary_brand}" not found.'}
 
+        # Normalize to a list either way.
+        if secondary_brands:
+            brands_list = list(secondary_brands)
+        elif secondary_brand:
+            brands_list = [secondary_brand]
+        else:
+            return {'found': False, 'message': 'At least one secondary_brand (or secondary_brands list) is required.'}
+
         top_shops = (primary_sub.groupby(['shop_code', 'shop_name_as_per_company_data'])['sale_qty_in_box']
                      .sum().sort_values(ascending=False).head(top_n))
         top_shop_codes = top_shops.reset_index()['shop_code'].tolist()
 
-        secondary_sub = df[(df['brand_name_as_per_company_data'].str.upper() == secondary_brand.upper()) &
-                            (df['shop_code'].isin(top_shop_codes))]
-        secondary_by_shop = secondary_sub.groupby('shop_code')['sale_qty_in_box'].sum()
-
         table = top_shops.reset_index()
         table.columns = ['shop_code', 'Shop Name', f'{primary_brand} Qty']
-        table[f'{secondary_brand} Qty'] = table['shop_code'].map(secondary_by_shop).fillna(0).astype(int)
+
+        gap_info = {}
+        for sec_brand in brands_list:
+            secondary_sub = df[(df['brand_name_as_per_company_data'].str.upper() == sec_brand.upper()) &
+                                (df['shop_code'].isin(top_shop_codes))]
+            secondary_by_shop = secondary_sub.groupby('shop_code')['sale_qty_in_box'].sum()
+            col_name = f'{sec_brand} Qty'
+            table[col_name] = table['shop_code'].map(secondary_by_shop).fillna(0).astype(int)
+            zero_gap_shops = table[table[col_name] == 0]
+            gap_info[sec_brand] = {
+                'gap_shops_count': len(zero_gap_shops),
+                'gap_shops': zero_gap_shops['Shop Name'].tolist(),
+            }
+
         table.insert(0, 'Rank', range(1, len(table) + 1))
 
-        zero_gap_shops = table[table[f'{secondary_brand} Qty'] == 0]
-
-        return {
+        result = {
             'found': True,
             'primary_brand': primary_brand,
-            'secondary_brand': secondary_brand,
+            'secondary_brands': brands_list,
             'table': table.to_dict('records'),
-            'gap_shops_count': len(zero_gap_shops),
-            'gap_shops': zero_gap_shops['Shop Name'].tolist()
+            'gap_info': gap_info,
         }
+        # Backward compatibility: if there was only ONE secondary brand,
+        # also expose the old flat fields (secondary_brand, gap_shops_count,
+        # gap_shops) so any existing code/tests relying on the old shape
+        # still work unchanged.
+        if len(brands_list) == 1:
+            only = brands_list[0]
+            result['secondary_brand'] = only
+            result['gap_shops_count'] = gap_info[only]['gap_shops_count']
+            result['gap_shops'] = gap_info[only]['gap_shops']
+        return result
 
     # ------------------------------------------------------------------
     # h) Month-over-Month Gainers & Losers (Segment-wise, Brand-wise)
@@ -729,12 +756,10 @@ class SmartQueryEngine:
     #    dimension_full_profile for each value. Optional scope_filters
     #    (e.g. company) scopes the WHOLE comparison to just that context.
     # ------------------------------------------------------------------
-    def compare_dimension_values(self, column: str, values: list, max_values: int = 10, scope_filters: dict = None):
+    def compare_dimension_values(self, column: str, values: list, max_values: int = None, scope_filters: dict = None):
         if len(values) < 2:
             return {'found': False, 'message': 'Please provide at least 2 values to compare.'}
-        if len(values) > max_values:
-            return {'found': False,
-                    'message': f'Maximum {max_values} values allowed. You gave {len(values)}.'}
+        # NOTE: no upper limit -- comparisons work for ANY number of values.
 
         details = {v: self.dimension_full_profile(column, v, scope_filters=scope_filters) for v in values}
         result = {'found': True, 'values_compared': len(values), 'details': details}
@@ -746,12 +771,10 @@ class SmartQueryEngine:
     # o) Compare 2-10 companies side by side (reuses company_full_profile's
     #    metrics for each company)
     # ------------------------------------------------------------------
-    def compare_companies(self, companies: list, max_companies: int = 10):
+    def compare_companies(self, companies: list, max_companies: int = None):
         if len(companies) < 2:
             return {'found': False, 'message': 'Please provide at least 2 companies to compare.'}
-        if len(companies) > max_companies:
-            return {'found': False,
-                    'message': f'Maximum {max_companies} companies allowed. You gave {len(companies)}.'}
+        # NOTE: no upper limit -- comparisons work for ANY number of companies.
 
         details = {company: self.company_full_profile(company) for company in companies}
         return {'found': True, 'companies_compared': len(companies), 'details': details}
@@ -1414,15 +1437,21 @@ class SmartQueryEngine:
     #    is at that SAME shop" -- a nested drill-down comparison.
     # ------------------------------------------------------------------
     def dimension_top_brands_with_shop_and_compare(self, primary_col: str, primary_value: str, top_n: int = 20,
-                                                     compare_brand: str = None):
+                                                     compare_brand: str = None, compare_brands: list = None):
         """GENERALIZED version -- works for ANY primary dimension
         (bd_segment, company_name, department, salesman_tse), not just
-        bd_segment."""
+        bd_segment. Also accepts EITHER a single 'compare_brand' (string,
+        kept for backward compatibility) OR a 'compare_brands' list (2+
+        brands) -- e.g. 'top brands in Semi Pre Whisky, aur Dennis aur
+        Royal Ace ka status wahan' needs 2 compare brands, not just 1."""
         df = self.df
         scope_df = df[df[primary_col].astype(str).str.upper() == str(primary_value).upper()]
         if scope_df.empty:
             return {'found': False, 'message': f'"{primary_value}" not found in {primary_col}.'}
         canonical_value = scope_df[primary_col].iloc[0]
+
+        # Normalize to a list either way.
+        comp_list = list(compare_brands) if compare_brands else ([compare_brand] if compare_brand else [])
 
         # Scope-level summary (shown ONCE, above the per-brand table) --
         # total sale of the whole scope + its share of the overall market
@@ -1436,35 +1465,24 @@ class SmartQueryEngine:
         top_brands = (scope_df.groupby('brand_name_as_per_company_data')['sale_qty_in_box']
                       .sum().sort_values(ascending=False).head(top_n))
 
-        # Compare brand's TRUE overall stats (its total across ALL shops/
-        # scopes, not scoped to any one shop) -- shown ONCE at top level
-        # since it doesn't change per-row. This answers "how big is this
-        # brand OVERALL", separate from "how much of it sells at brand X's
-        # top shop specifically" (which the per-row fields below cover).
-        compare_brand_overall_qty = None
-        compare_brand_overall_pct_of_market = None
-        compare_brand_overall_pct_of_scope = None
-        if compare_brand:
-            comp_all = df[df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
-            compare_brand_overall_qty = int(comp_all['sale_qty_in_box'].sum())
-            compare_brand_overall_pct_of_market = (
-                round(compare_brand_overall_qty / self.total_market * 100, 2) if self.total_market else 0.0
-            )
+        # Each compare brand's TRUE overall stats (its total across ALL
+        # shops/scopes, not scoped to any one shop) -- shown ONCE at top
+        # level since it doesn't change per-row.
+        compare_overall_stats = {}
+        for cb in comp_list:
+            comp_all = df[df['brand_name_as_per_company_data'].str.upper() == cb.upper()]
+            cb_qty = int(comp_all['sale_qty_in_box'].sum())
+            cb_pct_market = round(cb_qty / self.total_market * 100, 2) if self.total_market else 0.0
             comp_in_scope_qty = int(
-                scope_df[scope_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
+                scope_df[scope_df['brand_name_as_per_company_data'].str.upper() == cb.upper()]
                 ['sale_qty_in_box'].sum()
             )
-            compare_brand_overall_pct_of_scope = (
-                round(comp_in_scope_qty / scope_total_qty * 100, 2) if scope_total_qty else 0.0
-            )
-
-        # FIXED (not dynamic) column keys -- the compare_brand's actual name
-        # is already shown once at the top level, so per-row columns use
-        # short, clean, constant labels instead of repeating the full brand
-        # name in every column header.
-        qty_key = 'compare_brand_qty_at_shop'
-        seg_pct_key = 'scope_pct_at_shop'
-        market_pct_key = 'total_market_share'
+            cb_pct_scope = round(comp_in_scope_qty / scope_total_qty * 100, 2) if scope_total_qty else 0.0
+            compare_overall_stats[cb] = {
+                'compare_brand_overall_qty': cb_qty,
+                'compare_brand_overall_pct_of_market': cb_pct_market,
+                'compare_brand_overall_pct_of_scope': cb_pct_scope,
+            }
 
         rows = []
         for brand, brand_total_qty in top_brands.items():
@@ -1484,7 +1502,7 @@ class SmartQueryEngine:
                 round(brand_qty_at_shop / shop_scope_total * 100, 2) if shop_scope_total else 0.0
             )
             # This brand's OWN overall total-market share % (not scoped to
-            # this one shop) -- so both the top brand AND the compare brand
+            # this one shop) -- so both the top brand AND compare brand(s)
             # have a like-for-like "overall market share" figure shown.
             brand_overall_market_pct = (
                 float(round(int(brand_total_qty) / self.total_market * 100, 2)) if self.total_market else 0.0
@@ -1499,32 +1517,48 @@ class SmartQueryEngine:
                 'brand_total_market_share': brand_overall_market_pct,
             }
 
-            if compare_brand:
+            for cb in comp_list:
                 comp_df = scope_df[
                     (scope_df['shop_code'] == top_shop_code) &
-                    (scope_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper())
+                    (scope_df['brand_name_as_per_company_data'].str.upper() == cb.upper())
                 ]
                 comp_qty = int(comp_df['sale_qty_in_box'].sum())
                 comp_seg_pct = float(round(comp_qty / shop_scope_total * 100, 2)) if shop_scope_total else 0.0
                 comp_market_pct = float(round(comp_qty / self.total_market * 100, 2)) if self.total_market else 0.0
-                row[qty_key] = comp_qty
-                row[seg_pct_key] = comp_seg_pct
-                row[market_pct_key] = comp_market_pct
+                # Dynamic per-brand column names when 2+ compare brands (so
+                # they don't collide) -- single-brand case keeps the OLD
+                # fixed key names for backward compatibility.
+                if len(comp_list) > 1:
+                    row[f'{cb}_qty_at_shop'] = comp_qty
+                    row[f'{cb}_scope_pct_at_shop'] = comp_seg_pct
+                    row[f'{cb}_total_market_share'] = comp_market_pct
+                else:
+                    row['compare_brand_qty_at_shop'] = comp_qty
+                    row['scope_pct_at_shop'] = comp_seg_pct
+                    row['total_market_share'] = comp_market_pct
 
             rows.append(row)
 
-        return {
+        result = {
             'found': True,
             primary_col: canonical_value,
             'scope_total_sale': scope_total_qty,
             'overall_total_market': overall_total_market,
             'scope_pct_of_overall_market': scope_pct_of_market,
-            'compare_brand': compare_brand,
-            'compare_brand_overall_qty': compare_brand_overall_qty,
-            'compare_brand_overall_pct_of_market': compare_brand_overall_pct_of_market,
-            'compare_brand_overall_pct_of_scope': compare_brand_overall_pct_of_scope,
+            'compare_brands': comp_list if comp_list else None,
+            'compare_brands_overall_stats': compare_overall_stats if compare_overall_stats else None,
             'top_brands': rows,
         }
+        # Backward compatibility: if there was only ONE compare brand,
+        # also expose the old flat fields so existing code relying on
+        # them still works unchanged.
+        if len(comp_list) == 1:
+            only = comp_list[0]
+            result['compare_brand'] = only
+            result.update(compare_overall_stats[only])
+        elif not comp_list:
+            result['compare_brand'] = None
+        return result
 
     # ------------------------------------------------------------------
     # p) Growth breakdown -- WHERE (which department/shop/TSE) did a
@@ -1590,12 +1624,20 @@ class SmartQueryEngine:
     #    competitive landscape in a brand's strongholds (top).
     # ------------------------------------------------------------------
     def brand_weak_shops_analysis(self, brand_name: str, bottom_n_shops: int = 10,
-                                   compare_brand: str = None, top_n_other_brands: int = 5,
+                                   compare_brand: str = None, compare_brands: list = None,
+                                   top_n_other_brands: int = 5,
                                    find_bottom: bool = True, restrict_to_own_segment: bool = False):
+        """NOTE: accepts EITHER a single 'compare_brand' (string, kept for
+        backward compatibility) OR a 'compare_brands' list (2+ brands) --
+        e.g. 'Dennis ki weak shops, aur wahan Royal Ace aur White & Blue
+        ka status' needs 2 compare brands, not just 1."""
         df = self.df
         sub = df[df['brand_name_as_per_company_data'].str.upper() == brand_name.upper()]
         if sub.empty:
             return {'found': False, 'message': f'Brand "{brand_name}" not found.'}
+
+        # Normalize to a list either way.
+        comp_list = list(compare_brands) if compare_brands else ([compare_brand] if compare_brand else [])
 
         # If restricting to the brand's own bd_segment, only consider brands
         # within that same segment when finding "top brands at this shop" --
@@ -1610,15 +1652,16 @@ class SmartQueryEngine:
         for (shop_code, shop_name), brand_qty in shop_sales.items():
             shop_df = universe_df[universe_df['shop_code'] == shop_code]
 
-            if compare_brand:
-                comp_sub = shop_df[shop_df['brand_name_as_per_company_data'].str.upper() == compare_brand.upper()]
-                comp_qty = int(comp_sub['sale_qty_in_box'].sum())
-                rows.append({
+            if comp_list:
+                row = {
                     'shop_code': shop_code,
                     'shop_name': shop_name,
                     f'{brand_name}_qty': int(brand_qty),
-                    f'{compare_brand}_qty': comp_qty,
-                })
+                }
+                for cb in comp_list:
+                    comp_sub = shop_df[shop_df['brand_name_as_per_company_data'].str.upper() == cb.upper()]
+                    row[f'{cb}_qty'] = int(comp_sub['sale_qty_in_box'].sum())
+                rows.append(row)
             else:
                 # Market share % = this brand's qty at this shop / TOTAL
                 # qty at this shop (within the same universe -- own segment
@@ -1641,16 +1684,20 @@ class SmartQueryEngine:
                         'top_brand_market_share_pct_at_shop': market_share_pct,
                     })
 
-        return {
+        result = {
             'found': True,
             'brand': brand_name,
             'analysis_type': 'weakest_shops' if find_bottom else 'strongest_shops',
             'restricted_to_own_bd_segment': restrict_to_own_segment,
             'bd_segment': list(own_bd_segment) if restrict_to_own_segment else None,
             'n_shops': bottom_n_shops,
-            'compare_brand': compare_brand,
+            'compare_brands': comp_list if comp_list else None,
             'rows': rows,
         }
+        # Backward compatibility: expose the old singular 'compare_brand'
+        # field too, so existing code relying on it still works unchanged.
+        result['compare_brand'] = comp_list[0] if len(comp_list) == 1 else compare_brand
+        return result
 
 
 # ----------------------------------------------------------------------
