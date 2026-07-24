@@ -6,6 +6,24 @@ import ExcelJS from "exceljs"
 import jsPDF from "jspdf"
 import "jspdf-autotable"
 
+const CHAT_HISTORY_KEY = "rsd_chat_history"
+const MAX_SAVED_CHATS = 100
+
+// Loads saved chats from localStorage (so refreshing the browser doesn't
+// lose sidebar history). Falls back to a single fresh chat if nothing is
+// saved yet, or if the saved data is corrupted/invalid for any reason.
+function loadSavedChats() {
+  try {
+    const raw = localStorage.getItem(CHAT_HISTORY_KEY)
+    if (!raw) return [{ id: 1, title: "New conversation", messages: [] }]
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed
+  } catch (err) {
+    console.error("Failed to load saved chats:", err)
+  }
+  return [{ id: 1, title: "New conversation", messages: [] }]
+}
+
 let chatIdCounter = 1
 
 function TrendChart({ chartData, isDark }) {
@@ -51,8 +69,15 @@ function TrendChart({ chartData, isDark }) {
 }
 
 export default function App() {
-  const [chats, setChats] = useState([{ id: 1, title: "New conversation", messages: [] }])
-  const [activeChatId, setActiveChatId] = useState(1)
+  const [chats, setChats] = useState(() => loadSavedChats())
+  const [activeChatId, setActiveChatId] = useState(() => {
+    const loaded = loadSavedChats()
+    // Bump the counter past whatever IDs were already saved, so new chats
+    // never accidentally reuse an old ID.
+    const maxId = Math.max(...loaded.map(ch => ch.id))
+    chatIdCounter = maxId
+    return loaded[0].id
+  })
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -85,6 +110,18 @@ export default function App() {
 
   const activeChat = chats.find(ch => ch.id === activeChatId)
   const messages = activeChat?.messages || []
+
+  // Persist chat history to localStorage on every change -- capped at
+  // MAX_SAVED_CHATS (keeping the most RECENT ones, dropping the oldest)
+  // so the sidebar survives a page refresh without growing unbounded.
+  useEffect(() => {
+    try {
+      const capped = chats.slice(0, MAX_SAVED_CHATS)
+      localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(capped))
+    } catch (err) {
+      console.error("Failed to save chat history:", err)
+    }
+  }, [chats])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -518,18 +555,6 @@ export default function App() {
               <p style={{ fontSize: "14px", color: c.text2, marginBottom: "24px", lineHeight: "1.6" }}>
                 Sales data ke baare mein kuch bhi poochho
               </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {["Top TSE kaun hai?", "Party wise month sale", "Total sales kitni?", "Brand performance"].map(q => (
-                  <button key={q} onClick={() => setInput(q)} style={{
-                    padding: "8px 16px", background: "transparent",
-                    border: `1px solid ${c.border}`, borderRadius: "20px",
-                    cursor: "pointer", fontSize: "13px", color: c.text, transition: "all 0.15s",
-                  }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = accent; e.currentTarget.style.color = accent }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = c.border; e.currentTarget.style.color = c.text }}
-                  >{q}</button>
-                ))}
-              </div>
             </div>
           )}
 
@@ -685,9 +710,6 @@ export default function App() {
               }}><Send size={16} /></button>
             </div>
           </div>
-          <p style={{ textAlign: "center", fontSize: "11px", color: c.text2, marginTop: "8px" }}>
-            RSD AI can make mistakes. Please verify important data.
-          </p>
         </div>
       </div>
 
