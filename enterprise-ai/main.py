@@ -2774,6 +2774,78 @@ def generate_daily_anomaly_summary() -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------
+# SELF-IMPROVEMENT FEEDBACK LOOP -- logs every query that DIDN'T get a
+# clean, direct answer (clarification needed, crash, or ambiguity) to a
+# Supabase table, so patterns can be reviewed later (e.g. "this exact
+# phrasing failed 15 times this week -- worth fixing proactively").
+#
+# ⚠️ IMPORTANT: this is TRACKING/LOGGING only -- it does NOT automatically
+# fix anything. A human (or Claude, when asked) still needs to review the
+# logged patterns and decide what's worth fixing, exactly like every fix
+# made this session. Automatic self-modification of the system prompt or
+# code based on logged failures is NOT implemented (and deliberately so --
+# doing that safely would need far more validation than logging alone).
+#
+# SETUP REQUIRED: create this table in Supabase (SQL editor):
+#   CREATE TABLE query_feedback_log (
+#     id BIGSERIAL PRIMARY KEY,
+#     created_at TIMESTAMPTZ DEFAULT now(),
+#     query_text TEXT,
+#     failure_type TEXT,   -- 'clarification' | 'crash' | 'ambiguity'
+#     detail TEXT
+#   );
+# If the table doesn't exist yet, logging silently no-ops (never breaks
+# the actual chat response) until you create it.
+# ---------------------------------------------------------------------
+def log_query_feedback(query_text: str, failure_type: str, detail: str = ""):
+    try:
+        supabase.table("query_feedback_log").insert({
+            "query_text": query_text[:500],  # cap length, just in case
+            "failure_type": failure_type,
+            "detail": str(detail)[:1000],
+        }).execute()
+    except Exception as e:
+        # Logging is best-effort -- if the table doesn't exist yet, or
+        # Supabase has a hiccup, NEVER let this break the actual chat
+        # response the user is waiting for.
+        print(f"Feedback logging skipped (non-critical): {e}")
+
+
+@app.get("/feedback-summary")
+def feedback_summary(days: int = 7, limit: int = 20):
+    """Returns the most common failed/clarification/ambiguity query
+    patterns from the last N days -- open this in a browser periodically
+    to see what's worth fixing next, instead of waiting for someone to
+    manually report an issue."""
+    try:
+        cutoff = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)).isoformat()
+        result = supabase.table("query_feedback_log").select("*").gte("created_at", cutoff).execute()
+        rows = result.data
+    except Exception as e:
+        return {"error": f"Could not read feedback log (has the table been created in Supabase yet?): {e}"}
+
+    if not rows:
+        return {"period_days": days, "total_logged": 0, "message": "Koi failure/clarification log nahi mila is period mein. 🎉"}
+
+    log_df = pd.DataFrame(rows)
+    by_type = log_df["failure_type"].value_counts().to_dict()
+
+    # Group similar queries together (simple lowercase+strip normalization)
+    # so "Sharma ki sale batao" and "sharma ki sale batao" count as the
+    # SAME repeated pattern, not two different ones.
+    log_df["normalized"] = log_df["query_text"].astype(str).str.lower().str.strip()
+    top_patterns = (log_df.groupby("normalized").size().sort_values(ascending=False).head(limit))
+    pattern_list = [{"query": q, "count": int(c)} for q, c in top_patterns.items()]
+
+    return {
+        "period_days": days,
+        "total_logged": len(rows),
+        "by_failure_type": by_type,
+        "top_repeated_patterns": pattern_list,
+    }
+
+
 @app.get("/daily-alert")
 def daily_alert():
     """Called once a day by an EXTERNAL cron service (see setup notes
@@ -2912,6 +2984,7 @@ def chat(request: ChatRequest, http_req: Request):
 
         if not spec.get("query_understood", True):
             clarification = spec.get("clarification_needed") or "Sawaal thoda aur specific kar sakte ho?"
+            log_query_feedback(request.message, "clarification", clarification)
             return {"reply": f"🤔 Mujhe yeh sawaal 100% clear nahi hai. {clarification}"}
 
         # MULTI-STEP: user asked 2+ INDEPENDENT questions in one message
@@ -2941,6 +3014,7 @@ def chat(request: ChatRequest, http_req: Request):
             # help, so respond immediately with the matching options
             # instead of burning a retry attempt or giving a generic error.
             options_str = ", ".join(e.options)
+            log_query_feedback(request.message, "ambiguity", f"{e.dimension_label}: {e.search_term} -> {options_str}")
             return {"reply": (f"🤔 '{e.search_term}' se {len(e.options)} alag {e.dimension_label} match hote hain: "
                                f"{options_str}. Konsa specifically chahiye?")}
         except Exception as e:
@@ -2949,6 +3023,7 @@ def chat(request: ChatRequest, http_req: Request):
             continue
 
     if last_error is not None:
+        log_query_feedback(request.message, "crash", str(last_error))
         return {"reply": ("🤔 Sawaal samajh nahi paya. Try karo: 'Top TSE April mein', "
                            "'DCCWS department ka top brand', 'May vs April total', 'Dennis ka rank kya hai', etc.")}
 

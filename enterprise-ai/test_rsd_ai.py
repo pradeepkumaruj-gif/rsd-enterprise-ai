@@ -423,6 +423,8 @@ def run_config_validation(t):
     t.check_true("Default TSE company scope logic present", 'DEFAULT_TSE_COMPANY_SCOPE' in source)
     t.check_true("Proactive alert system present (/daily-alert endpoint)", '/daily-alert' in source)
     t.check_true("Email sending function present (send_alert_email)", 'def send_alert_email' in source)
+    t.check_true("Feedback loop logging function present (log_query_feedback)", 'def log_query_feedback' in source)
+    t.check_true("Feedback summary endpoint present (/feedback-summary)", '/feedback-summary' in source)
 
 
 # ---------------------------------------------------------------------
