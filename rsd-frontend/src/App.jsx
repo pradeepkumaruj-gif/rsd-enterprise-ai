@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from "react"
 import Chart from 'chart.js/auto'
-import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X, Download, FileSpreadsheet, FileText, FileDown } from "lucide-react"
+import { Send, Plus, Menu, Sun, Moon, MessageSquare, Mic, MicOff, Copy, Check, Trash2, Settings, X, Download, FileSpreadsheet, FileText, FileDown, Square, Pencil } from "lucide-react"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
 import jsPDF from "jspdf"
 import "jspdf-autotable"
 
 const CHAT_HISTORY_KEY = "rsd_chat_history"
+const ACCESS_KEY_STORAGE_KEY = "rsd_access_key"
 const MAX_SAVED_CHATS = 100
 
 // Loads saved chats from localStorage (so refreshing the browser doesn't
@@ -78,6 +79,13 @@ export default function App() {
     chatIdCounter = maxId
     return loaded[0].id
   })
+  // Access keyword gate -- stored locally so the user doesn't need to
+  // re-enter it every single visit. The backend ALSO validates this on
+  // every /chat call (not just here) -- this local check is just for a
+  // smooth UX, not the real security boundary.
+  const [accessKey, setAccessKey] = useState(() => localStorage.getItem(ACCESS_KEY_STORAGE_KEY) || "")
+  const [keyInput, setKeyInput] = useState("")
+  const [accessError, setAccessError] = useState("")
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -88,10 +96,13 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
   const [downloadMenuId, setDownloadMenuId] = useState(null)
+  const [renamingChatId, setRenamingChatId] = useState(null)
+  const [renameInput, setRenameInput] = useState("")
   const recognitionRef = useRef(null)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const streamIntervalRef = useRef(null)
+  const abortControllerRef = useRef(null)  // lets the Stop button cancel an in-flight request
 
   const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
   const accent = "#D97757"
@@ -149,6 +160,21 @@ export default function App() {
       if (activeChatId === id) setActiveChatId(remaining[0].id)
       return remaining
     })
+  }
+
+  const startRename = (chat, e) => {
+    e.stopPropagation()
+    setRenamingChatId(chat.id)
+    setRenameInput(chat.title)
+  }
+
+  const saveRename = () => {
+    const trimmed = renameInput.trim()
+    if (trimmed) {
+      setChats(prev => prev.map(ch => ch.id === renamingChatId ? { ...ch, title: trimmed } : ch))
+    }
+    setRenamingChatId(null)
+    setRenameInput("")
   }
 
   const startVoice = () => {
@@ -408,19 +434,32 @@ export default function App() {
     if (window.innerWidth < 768) setSidebarOpen(false)
     try {
       const controller = new AbortController()
+      abortControllerRef.current = controller
       const timeout = setTimeout(() => controller.abort(), 60000)
       const response = await fetch("https://rsd-enterprise-ai-production.up.railway.app/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: msgText,
+          access_key: accessKey,
           history: messages.slice(-6).map(m => ({ role: m.role, content: m.content }))
         }),
         signal: controller.signal
       })
       clearTimeout(timeout)
+      abortControllerRef.current = null
       const data = await response.json()
       setLoading(false)
+
+      // Backend rejected the stored keyword (wrong/expired) -- clear it
+      // and drop back to the gate screen instead of silently failing.
+      if (data.access_denied) {
+        localStorage.removeItem(ACCESS_KEY_STORAGE_KEY)
+        setAccessKey("")
+        setAccessError("Access keyword galat tha ya expire ho gaya -- dobara enter karo.")
+        return
+      }
+
       const aiId = Date.now()
       const downloadTable = data.download_table || null
       const chartData = data.chart_data || null
@@ -431,10 +470,51 @@ export default function App() {
       })
     } catch (error) {
       setLoading(false)
+      abortControllerRef.current = null
+      // User-initiated stop -- don't show a scary "Error!" message, since
+      // this was intentional, not a failure.
+      if (error.name === "AbortError") {
+        setChats(prev => prev.map(ch =>
+          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: Date.now(), role: "assistant", content: "⏹️ Rok diya gaya." }] }
+        ))
+        return
+      }
       setChats(prev => prev.map(ch =>
         ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: Date.now(), role: "assistant", content: "❌ Error! Dobara try karo." }] }
       ))
     }
+  }
+
+  // Stops an in-flight request (network call) AND/OR the word-by-word
+  // streaming animation, whichever is currently active -- lets the user
+  // cut off a response they've decided is wrong/unwanted, instead of
+  // waiting for it to finish.
+  const stopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    if (streamIntervalRef.current) {
+      clearInterval(streamIntervalRef.current)
+      streamIntervalRef.current = null
+      setIsStreaming(false)
+      // Save whatever was streamed so far, instead of discarding it entirely.
+      if (streamingText.trim()) {
+        setChats(prev => prev.map(ch =>
+          ch.id !== activeChatId ? ch : { ...ch, messages: [...ch.messages, { id: Date.now(), role: "assistant", content: streamingText }] }
+        ))
+      }
+      setStreamingText("")
+    }
+    setLoading(false)
+  }
+
+  const unlockAccess = () => {
+    if (!keyInput.trim()) return
+    localStorage.setItem(ACCESS_KEY_STORAGE_KEY, keyInput.trim())
+    setAccessKey(keyInput.trim())
+    setAccessError("")
+    setKeyInput("")
   }
 
   const handleKeyDown = (e) => {
@@ -445,6 +525,51 @@ export default function App() {
     setInput(e.target.value)
     e.target.style.height = "auto"
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px"
+  }
+
+  // Access keyword gate -- shown INSTEAD of the chat UI until a keyword
+  // is entered. The real enforcement happens on the backend (every /chat
+  // call is checked there too) -- this screen just gives a clean UX
+  // instead of letting people stumble into a broken chat.
+  if (!accessKey) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        height: "100vh", background: "#212121", color: "#ececec",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      }}>
+        <div style={{ width: "100%", maxWidth: "360px", padding: "32px 24px", textAlign: "center" }}>
+          <div style={{
+            width: "48px", height: "48px", borderRadius: "50%", background: "#D97757",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "20px", fontWeight: "700", color: "white", margin: "0 auto 16px",
+          }}>R</div>
+          <p style={{ fontSize: "18px", fontWeight: "600", marginBottom: "6px" }}>RSD Enterprise AI</p>
+          <p style={{ fontSize: "13px", color: "#888", marginBottom: "20px" }}>Access keyword daalo aage badhne ke liye</p>
+          <input
+            type="password"
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") unlockAccess() }}
+            placeholder="Access keyword"
+            autoFocus
+            style={{
+              width: "100%", padding: "11px 14px", borderRadius: "10px",
+              border: "1px solid #2e2e2e", background: "#2f2f2f", color: "#ececec",
+              fontSize: "14px", outline: "none", marginBottom: "12px", textAlign: "center",
+            }}
+          />
+          {accessError && (
+            <p style={{ fontSize: "12px", color: "#e57373", marginBottom: "12px" }}>{accessError}</p>
+          )}
+          <button onClick={unlockAccess} disabled={!keyInput.trim()} style={{
+            width: "100%", padding: "11px", borderRadius: "10px", border: "none",
+            background: keyInput.trim() ? "#D97757" : "#3a3a3a", color: "white",
+            fontSize: "14px", fontWeight: "600", cursor: keyInput.trim() ? "pointer" : "default",
+          }}>Unlock</button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -479,7 +604,7 @@ export default function App() {
             <p style={{ fontSize: "11px", color: c.text2, padding: "6px 8px", textTransform: "uppercase", letterSpacing: "0.8px", fontWeight: "600" }}>Recents</p>
             {chats.map(ch => (
               <div key={ch.id}
-                onClick={() => { setActiveChatId(ch.id); if (window.innerWidth < 768) setSidebarOpen(false) }}
+                onClick={() => { if (renamingChatId !== ch.id) { setActiveChatId(ch.id); if (window.innerWidth < 768) setSidebarOpen(false) } }}
                 style={{
                   display: "flex", alignItems: "center", gap: "8px",
                   padding: "8px 10px", borderRadius: "6px", cursor: "pointer", marginBottom: "1px",
@@ -490,15 +615,42 @@ export default function App() {
                 onMouseLeave={e => { if (ch.id !== activeChatId) e.currentTarget.style.background = "transparent" }}
               >
                 <MessageSquare size={13} color={c.text2} style={{ flexShrink: 0 }} />
-                <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{ch.title}</span>
-                <button onClick={(e) => deleteChat(ch.id, e)} style={{
-                  background: "transparent", border: "none", cursor: "pointer",
-                  color: c.text2, padding: "2px", opacity: 0, flexShrink: 0,
-                  display: "flex", alignItems: "center",
-                }}
-                  onMouseEnter={e => e.currentTarget.style.opacity = 1}
-                  onMouseLeave={e => e.currentTarget.style.opacity = 0}
-                ><Trash2 size={12} /></button>
+                {renamingChatId === ch.id ? (
+                  <input
+                    autoFocus
+                    value={renameInput}
+                    onChange={e => setRenameInput(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    onKeyDown={e => { if (e.key === "Enter") saveRename(); if (e.key === "Escape") setRenamingChatId(null) }}
+                    onBlur={saveRename}
+                    style={{
+                      fontSize: "13px", flex: 1, background: c.inputBg, color: c.text,
+                      border: `1px solid ${accent}`, borderRadius: "4px", padding: "2px 6px", outline: "none",
+                    }}
+                  />
+                ) : (
+                  <span style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{ch.title}</span>
+                )}
+                {renamingChatId !== ch.id && (
+                  <>
+                    <button onClick={(e) => startRename(ch, e)} style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: c.text2, padding: "2px", opacity: 0, flexShrink: 0,
+                      display: "flex", alignItems: "center",
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                      onMouseLeave={e => e.currentTarget.style.opacity = 0}
+                    ><Pencil size={12} /></button>
+                    <button onClick={(e) => deleteChat(ch.id, e)} style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: c.text2, padding: "2px", opacity: 0, flexShrink: 0,
+                      display: "flex", alignItems: "center",
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                      onMouseLeave={e => e.currentTarget.style.opacity = 0}
+                    ><Trash2 size={12} /></button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -701,13 +853,21 @@ export default function App() {
                 cursor: "pointer", padding: "7px", borderRadius: "8px",
                 color: listening ? "white" : c.text2, display: "flex", transition: "all 0.2s",
               }}>{listening ? <MicOff size={16} /> : <Mic size={16} />}</button>
-              <button onClick={sendMessage} disabled={!input.trim() || loading || isStreaming} style={{
-                background: input.trim() && !loading && !isStreaming ? accent : (isDark ? "#333" : "#e0e0e0"),
-                border: "none", cursor: input.trim() ? "pointer" : "default",
-                padding: "7px", borderRadius: "8px", color: "white",
-                display: "flex", alignItems: "center", flexShrink: 0, transition: "all 0.2s",
-                opacity: !input.trim() || loading || isStreaming ? 0.5 : 1,
-              }}><Send size={16} /></button>
+              {(loading || isStreaming) ? (
+                <button onClick={stopGeneration} title="Rokein" style={{
+                  background: "#e05c4d", border: "none", cursor: "pointer",
+                  padding: "7px", borderRadius: "8px", color: "white",
+                  display: "flex", alignItems: "center", flexShrink: 0,
+                }}><Square size={14} fill="white" /></button>
+              ) : (
+                <button onClick={sendMessage} disabled={!input.trim()} style={{
+                  background: input.trim() ? accent : (isDark ? "#333" : "#e0e0e0"),
+                  border: "none", cursor: input.trim() ? "pointer" : "default",
+                  padding: "7px", borderRadius: "8px", color: "white",
+                  display: "flex", alignItems: "center", flexShrink: 0, transition: "all 0.2s",
+                  opacity: !input.trim() ? 0.5 : 1,
+                }}><Send size={16} /></button>
+              )}
             </div>
           </div>
         </div>
